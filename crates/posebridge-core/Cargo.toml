@@ -1,0 +1,16 @@
+[package]
+name = "posebridge-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+btleplug.workspace = true
+tokio-serial.workspace = true
+futures-util.workspace = true
+rosc.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "posebridge-capi"
+version.workspace = true
+# cbindgen 0.27 understands the traditional no_mangle spelling.
+edition = "2021"
+rust-version.workspace = true
+build = "build.rs"
+
+[lib]
+name = "posebridge"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+posebridge-core.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cbindgen.workspace = true

@@ -1,0 +1,36 @@
+[workspace]
+members = ["crates/posebridge-core", "crates/posebridge-cli", "crates/posebridge-capi"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+
+[workspace.dependencies]
+posebridge-core = { path = "crates/posebridge-core" }
+tokio = { version = "=1.49.0", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+btleplug = "0.11.8"
+tokio-serial = "5.4"
+futures-util = "0.3"
+rosc = "0.11"
+uuid = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+clap = { version = "=4.6.6", features = ["derive"] }
+cbindgen = "=0.27.0"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.release]
+debug = 0
+incremental = false
+strip = "none"
+panic = "unwind"
