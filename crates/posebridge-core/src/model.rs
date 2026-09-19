@@ -60,11 +60,21 @@ pub enum Pattern {
     Wrap,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BleConnectionMode {
+    #[default]
+    Default,
+    Throughput,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Source {
     Ble {
         device_id: String,
+        #[serde(default)]
+        connection_mode: BleConnectionMode,
     },
     Usb {
         port: String,
@@ -133,8 +143,16 @@ impl Default for Config {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         match &self.source {
-            Source::Ble { device_id } if device_id.trim().is_empty() => {
+            Source::Ble { device_id, .. } if device_id.trim().is_empty() => {
                 return Err(Error::Invalid("BLE device_id is empty".into()));
+            }
+            Source::Ble {
+                connection_mode: BleConnectionMode::Throughput,
+                ..
+            } if !cfg!(target_os = "windows") => {
+                return Err(Error::Invalid(
+                    "BLE throughput preference requires Windows 11 or later".into(),
+                ));
             }
             Source::Usb { port, baud } if port.trim().is_empty() || *baud == 0 => {
                 return Err(Error::Invalid("USB port or baud is invalid".into()));
@@ -221,6 +239,26 @@ pub struct PoseSnapshot {
     pub fresh: bool,
 }
 
+/// Host read/notification boundaries, before parsing or OSC coalescing.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DeliveryStats {
+    pub reads: u64,
+    pub max_bytes_per_read: u64,
+    pub max_frames_per_read: u64,
+    /// Gap counts in [0,1), [1,10), [10,30), [30,100), [100,infinity) milliseconds.
+    pub gap_histogram: [u64; 5],
+    pub max_gap_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct BleLinkStatus {
+    pub requested_mode: BleConnectionMode,
+    pub request_status: Option<String>,
+    pub connection_interval_ms: Option<f64>,
+    pub peripheral_latency: Option<u16>,
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct StatusSnapshot {
     pub state: ConnectionState,
@@ -237,6 +275,8 @@ pub struct StatusSnapshot {
     pub interval_max_ms: f64,
     pub last_error: Option<String>,
     pub configuration_report: Option<String>,
+    pub delivery: DeliveryStats,
+    pub ble_link: Option<BleLinkStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

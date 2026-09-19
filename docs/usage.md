@@ -58,6 +58,21 @@ USB 接线后运行：
 未指定安装映射时，诊断使用传感器 XYZ 的单位基底并明确提示；这不是已校准的头部朝向。
 `--json` 输出 NDJSON，便于保存和脚本分析。`--duration 0` 持续运行至 Ctrl+C。
 
+`status.delivery` 统计解析前的读取／通知边界：次数、最大字节数、每次最多完整帧数，以及通知间隔直方图。
+直方图依次为 `<1`、`1–<10`、`10–<30`、`30–<100`、`>=100 ms`。一份 BLE 通知可能含多份姿态；
+姿态帧率高不代表通知以同样频率均匀到达。这里测到的是主机交付时间，不能区分空口与系统栈内部延迟。
+
+Windows 11 或更新系统可显式尝试临时高吞吐连接偏好（experimental）：
+
+```sh
+posebridge diagnose --transport ble --device "设备标识" --ble-mode throughput --duration 15 --json
+```
+
+默认 `--ble-mode default` 保留系统连接策略；macOS 不支持该选项的 throughput 值。
+Windows 的 `status.ble_link` 显示请求状态、系统报告的连接间隔和外围设备延迟；请求成功不保证达到目标姿态率。
+该偏好可能减少可同时连接的其他 BLE 设备数量，停止、断开或异常退出释放句柄后不再持有请求。
+它不修改传感器回传率或 Flash。默认模式在系统不支持查询连接参数时仍可采集，并在 `note` 中说明。
+
 可选的设备四元数读取：
 
 ```sh
@@ -90,6 +105,17 @@ USB 接线后运行：
 
 仅支持本机回环目标。回正和用户侧平滑交给接收软件，PoseBridge 不重复施加。
 这些消息是明确的 PoseBridge 姿态约定，不是任何支持 OSC 的软件都能直接识别；详见[协议与坐标](protocol.md)。
+
+新姿态到达即触发发送；限速等待期间只保留最新姿态，使用截止时间唤醒。没有新采样时不重复发送，也不补发积压历史帧。
+用独立本机接收器测量 Release 输入与实际 OSC 速率：
+
+```sh
+python3 scripts/measure_osc.py -- simulate --sample-rate-hz 200 --osc-rate-hz 200 --duration 15
+python3 scripts/measure_osc.py -- bridge --transport usb --port /dev/cu.usbserial-110 --mount=-y,+x,+z --osc-rate-hz 200 --duration 15
+```
+
+测量脚本验证地址、类型、有限数值和四元数范数，丢弃开始 3 秒，报告接收间隔分位数；不会改变设备速率。
+高频输出四元数默认由连续角度流本地转换得到，不要求选择原生四元数寄存器输入。
 
 ## 无设备模拟
 

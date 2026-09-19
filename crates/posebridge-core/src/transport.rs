@@ -130,6 +130,7 @@ pub(crate) enum Connection {
         notify: Characteristic,
         writer: Option<Characteristic>,
         stream: Pin<Box<dyn Stream<Item = ValueNotification> + Send>>,
+        link: Option<crate::ble_link::Link>,
     },
 }
 
@@ -155,7 +156,10 @@ impl Connection {
                 // Drop restores OS ownership; never send probe/configuration bytes on open.
                 Ok(Self::Usb(stream))
             }
-            Source::Ble { device_id } => {
+            Source::Ble {
+                device_id,
+                connection_mode,
+            } => {
                 let adapter = cancel_after(cancel, Duration::from_secs(10), adapter()).await?;
                 adapter
                     .start_scan(ScanFilter::default())
@@ -204,15 +208,17 @@ impl Connection {
                         .cloned();
                     let stream = peripheral.notifications().await.map_err(ble_error)?;
                     peripheral.subscribe(&notify).await.map_err(ble_error)?;
-                    Ok((notify, writer, stream))
+                    let link = crate::ble_link::Link::open(&peripheral, *connection_mode).await?;
+                    Ok((notify, writer, stream, link))
                 })
                 .await;
                 match setup {
-                    Ok((notify, writer, stream)) => Ok(Self::Ble {
+                    Ok((notify, writer, stream, link)) => Ok(Self::Ble {
                         peripheral,
                         notify,
                         writer,
                         stream,
+                        link: Some(link),
                     }),
                     Err(e) => {
                         let _ =
@@ -276,11 +282,23 @@ impl Connection {
         }
     }
 
+    pub(crate) fn link_status(&self) -> Option<crate::BleLinkStatus> {
+        match self {
+            Self::Ble { link, .. } => link.as_ref().map(crate::ble_link::Link::status),
+            Self::Usb(_) => None,
+        }
+    }
+
     pub(crate) async fn close(&mut self) {
         if let Self::Ble {
-            peripheral, notify, ..
+            peripheral,
+            notify,
+            link,
+            ..
         } = self
         {
+            // Release any native connection preference before disconnecting.
+            *link = None;
             let _ =
                 tokio::time::timeout(Duration::from_secs(1), peripheral.unsubscribe(notify)).await;
             let _ = tokio::time::timeout(Duration::from_secs(1), peripheral.disconnect()).await;

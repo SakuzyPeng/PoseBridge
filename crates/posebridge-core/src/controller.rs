@@ -390,6 +390,9 @@ async fn pump(
 ) -> Result<()> {
     let start = Instant::now();
     let mut last_bytes = start;
+    let mut last_delivery: Option<Instant> = None;
+    let mut next_link_check = start + Duration::from_secs(1);
+    lock(shared).status.ble_link = connection.link_status();
     let mut parser = Parser::default();
     let mut raw = RawData::default();
     let mounting = config
@@ -409,8 +412,23 @@ async fn pump(
                 let bytes = bytes?;
                 last_bytes = Instant::now();
                 let ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-                lock(shared).status.bytes_received += bytes.len() as u64;
-                for frame in parser.push(&bytes) {
+                let frames = parser.push(&bytes);
+                {
+                    let mut state = lock(shared);
+                    state.status.bytes_received += bytes.len() as u64;
+                    let delivery = &mut state.status.delivery;
+                    delivery.reads += 1;
+                    delivery.max_bytes_per_read = delivery.max_bytes_per_read.max(bytes.len() as u64);
+                    delivery.max_frames_per_read = delivery.max_frames_per_read.max(frames.len() as u64);
+                    if let Some(previous) = last_delivery {
+                        let gap = last_bytes.duration_since(previous).as_secs_f64() * 1000.0;
+                        let bucket = [1.0, 10.0, 30.0, 100.0].partition_point(|limit| gap >= *limit);
+                        delivery.gap_histogram[bucket] += 1;
+                        delivery.max_gap_ms = delivery.max_gap_ms.max(gap);
+                    }
+                    last_delivery = Some(last_bytes);
+                }
+                for frame in frames {
                     lock(shared).status.frames_received += 1;
                     let q = match frame {
                         Frame::Motion { acceleration_g,angular_velocity_dps,euler_xyz_deg } => {
@@ -439,6 +457,11 @@ async fn pump(
             _ = wait_for_output(output_deadline) => emit(shared,sender)?,
             _ = ticks.tick() => {
                 let now = Instant::now();
+                if now >= next_link_check {
+                    let link_status = connection.link_status();
+                    lock(shared).status.ble_link = link_status;
+                    next_link_check = now + Duration::from_secs(1);
+                }
                 if now.duration_since(start) >= STALE_AFTER {
                     let mut state = lock(shared);
                     if state.pose.is_none() || !fresh(&state, now) {

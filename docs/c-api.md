@@ -39,6 +39,8 @@ pb_context_create
 
 输入变体：
 
+- BLE 的 source 可选 `"connection_mode":"throughput"`，在 Windows 11+ 临时请求高吞吐连接偏好；
+  缺省或 `"default"` 保留系统策略。macOS 拒绝 throughput。该配置不写仪器寄存器，停止／断开时释放请求。
 - USB：`{"kind":"usb","port":"COM3","baud":115200}`，macOS 改为实际 `/dev/cu.*` 路径。
 - 模拟器：`{"kind":"simulate","pattern":"fixed","euler_deg":[30,20,10],"rate_hz":100}`。
 - `pose_input` 为 `euler` 或 `quaternion`；硬件必须提供合法安装基底，模拟器不应用安装映射。
@@ -61,6 +63,9 @@ pb_context_create
 不是设备采样时间，也不能跨会话或进程比较。
 
 状态数值：0 idle、1 scanning、2 connecting、3 active、4 stale、5 reconnecting、6 stopped、7 failed、8 configuring、9 complete。
+
+`pb_status_json` 另含 `delivery`（读取／通知大小与间隔直方图）和 `ble_link`（可用时的系统连接参数），
+详见[使用指南](usage.md)。这些诊断通过 JSON 扩展，`PbStatus` 的二进制布局不变。
 
 | 结果码 | 含义 |
 |---|---|

@@ -1,5 +1,6 @@
 //! Sensor acquisition, orientation conversion and local OSC forwarding.
 
+mod ble_link;
 mod controller;
 mod model;
 pub mod osc;

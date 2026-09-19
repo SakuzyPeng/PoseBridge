@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use posebridge_core::{
-    Config, ConnectionState, Controller, DeviceCommand, Error, OscConfig, OscFormat, Pattern,
-    PoseInput, Result, Source, TransportKind, pose::Mounting,
+    BleConnectionMode, Config, ConnectionState, Controller, DeviceCommand, Error, OscConfig,
+    OscFormat, Pattern, PoseInput, Result, Source, TransportKind, pose::Mounting,
 };
 use std::net::SocketAddr;
 use std::sync::{
@@ -39,6 +39,11 @@ enum Input {
     Euler,
     Quaternion,
 }
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum BleMode {
+    Default,
+    Throughput,
+}
 #[derive(Clone, Copy, ValueEnum)]
 enum Format {
     Quaternion,
@@ -68,6 +73,9 @@ struct InputArgs {
     mount: Option<String>,
     #[arg(long, value_enum, default_value = "euler")]
     pose_input: Input,
+    /// Windows 11+ connection preference, held only while connected; does not configure the sensor.
+    #[arg(long, value_enum, default_value = "default")]
+    ble_mode: BleMode,
 }
 
 impl InputArgs {
@@ -89,11 +97,18 @@ impl InputArgs {
                     device_id: self
                         .device
                         .ok_or_else(|| Error::Invalid("BLE requires --device from scan".into()))?,
+                    connection_mode: match self.ble_mode {
+                        BleMode::Default => BleConnectionMode::Default,
+                        BleMode::Throughput => BleConnectionMode::Throughput,
+                    },
                 }
             }
             Transport::Usb => {
                 if self.device.is_some() {
                     return Err(Error::Invalid("--device is only valid for BLE".into()));
+                }
+                if self.ble_mode != BleMode::Default {
+                    return Err(Error::Invalid("--ble-mode is only valid for BLE".into()));
                 }
                 Source::Usb {
                     port: self

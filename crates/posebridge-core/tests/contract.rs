@@ -276,3 +276,22 @@ fn configuration_validation_preserves_previous_config() {
         .is_err()
     );
 }
+
+#[test]
+fn ble_connection_preference_is_optional_and_platform_checked() {
+    // Existing C ABI JSON configs keep the OS default and never request new link settings.
+    let mut config: Config = serde_json::from_str(
+        r#"{"source":{"kind":"ble","device_id":"platform-identifier"},"mounting":{"right":1,"forward":2,"up":3}}"#,
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let Source::Ble {
+        connection_mode, ..
+    } = &mut config.source
+    else {
+        panic!("wrong source");
+    };
+    assert_eq!(*connection_mode, BleConnectionMode::Default);
+    *connection_mode = BleConnectionMode::Throughput;
+    assert_eq!(config.validate().is_ok(), cfg!(target_os = "windows"));
+}

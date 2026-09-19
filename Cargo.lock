@@ -867,6 +867,7 @@ dependencies = [
  "tokio",
  "tokio-serial",
  "uuid",
+ "windows",
 ]
 
 [[package]]
