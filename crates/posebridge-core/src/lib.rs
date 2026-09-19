@@ -2,6 +2,7 @@
 
 mod ble_link;
 mod controller;
+mod device;
 mod model;
 pub mod osc;
 pub mod pose;

@@ -234,6 +234,30 @@ impl Connection {
         }
     }
 
+    pub(crate) async fn device_name(&mut self, source: &Source) -> Option<String> {
+        match self {
+            Self::Ble { peripheral, .. } => peripheral
+                .properties()
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.local_name),
+            Self::Usb(_) => {
+                let Source::Usb { port, .. } = source else {
+                    return None;
+                };
+                tokio_serial::available_ports()
+                    .ok()?
+                    .into_iter()
+                    .find(|p| p.port_name == *port)
+                    .and_then(|p| match p.port_type {
+                        SerialPortType::UsbPort(info) => info.product,
+                        _ => None,
+                    })
+            }
+        }
+    }
+
     pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
         match self {
             Self::Usb(stream) => {

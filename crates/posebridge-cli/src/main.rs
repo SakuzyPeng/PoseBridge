@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use posebridge_core::{
-    BleConnectionMode, Config, ConnectionState, Controller, DeviceCommand, Error, OscConfig,
-    OscFormat, OscVersion, OutputProfile, Pattern, PoseInput, Result, Source, TransportKind,
+    AlgorithmMode, BleConnectionMode, Config, ConnectionState, Controller, DeviceCommand, Error,
+    OscConfig, OscFormat, OutputProfile, Pattern, PoseInput, Result, Source, TransportKind,
     pose::Mounting,
 };
 use std::net::SocketAddr;
@@ -52,9 +52,9 @@ enum Format {
     Euler,
 }
 #[derive(Clone, Copy, ValueEnum)]
-enum Version {
-    V1,
-    V2,
+enum Algorithm {
+    SixAxis,
+    NineAxis,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Profile {
@@ -73,6 +73,9 @@ enum Trajectory {
 
 #[derive(Args)]
 struct InputArgs {
+    /// Logical identity shared with consumers; default transport:platform-identifier.
+    #[arg(long)]
+    source_id: Option<String>,
     #[arg(long, value_enum)]
     transport: Transport,
     /// Platform BLE identifier returned by scan; not a device name.
@@ -134,6 +137,7 @@ impl InputArgs {
         };
         Ok(Config {
             source,
+            source_id: self.source_id,
             mounting: Some(mounting),
             pose_input: match self.pose_input {
                 Input::Euler => PoseInput::Euler,
@@ -154,19 +158,12 @@ struct OutputArgs {
     osc_rate_hz: u32,
     #[arg(long, value_enum, default_value = "quaternion")]
     format: Format,
-    /// v2 carries source/session timing; v1 retains the original pose-only contract.
-    #[arg(long, value_enum, default_value = "v1")]
-    osc_version: Version,
 }
 impl From<OutputArgs> for OscConfig {
     fn from(v: OutputArgs) -> Self {
         Self {
             target: v.osc_target,
             max_rate_hz: v.osc_rate_hz,
-            version: match v.osc_version {
-                Version::V1 => OscVersion::V1,
-                Version::V2 => OscVersion::V2,
-            },
             format: match v.format {
                 Format::Quaternion => OscFormat::Quaternion,
                 Format::Euler => OscFormat::Euler,
@@ -190,6 +187,17 @@ enum ConfigureAction {
     MagStart,
     MagStop,
     Save,
+    /// Explicit algorithm selection; does not save to flash.
+    Algorithm {
+        #[arg(long, value_enum)]
+        mode: Algorithm,
+    },
+    /// Six-axis only; does not implicitly change algorithm or save.
+    ZeroYaw,
+    /// Set device angle reference AND send SAVE (persistent device operation).
+    AngleReference,
+    /// Restore documented device defaults AND save them to flash.
+    ResetDefaults,
 }
 
 #[derive(Subcommand)]
@@ -200,6 +208,13 @@ enum Command {
         transport: Transport,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the documented configuration registers without changing any settings.
+    Inspect {
+        #[command(flatten)]
+        input: InputArgs,
         #[arg(long)]
         json: bool,
     },
@@ -225,6 +240,8 @@ enum Command {
     },
     /// Send deterministic, hardware-free pose trajectories.
     Simulate {
+        #[arg(long)]
+        source_id: Option<String>,
         #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         yaw: f64,
         #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
@@ -235,7 +252,7 @@ enum Command {
         pattern: Trajectory,
         #[arg(long, default_value_t = 100)]
         sample_rate_hz: u32,
-        /// Include explicitly synthetic elapsed sample time (use with --osc-version v2).
+        /// Include explicitly synthetic elapsed sample time.
         #[arg(long)]
         sample_clock: bool,
         #[command(flatten)]
@@ -249,6 +266,8 @@ enum Command {
     Configure {
         #[command(flatten)]
         input: InputArgs,
+        #[arg(long)]
+        json: bool,
         #[command(subcommand)]
         action: ConfigureAction,
     },
@@ -296,10 +315,11 @@ fn stream(
             {
                 return Ok(());
             }
-            let status = controller.status();
-            let pose = controller.latest_pose();
+            let snapshot = controller.snapshot();
+            let status = snapshot.status.clone();
+            let pose = snapshot.pose.clone();
             if json {
-                println!("{}", serde_json::json!({"status":status,"pose":pose}));
+                println!("{}", posebridge_core::snapshot_json(&snapshot)?);
             } else {
                 let angles = pose.as_ref().map(|p| p.euler_deg);
                 let raw = pose.as_ref().and_then(|p| p.raw.euler_xyz_deg);
@@ -334,6 +354,12 @@ fn stream(
     let stopped = controller.stop();
     result?;
     stopped?;
+    if json {
+        println!(
+            "{}",
+            posebridge_core::snapshot_json(&controller.snapshot())?
+        );
+    }
     if final_status.pose_count == 0 {
         return Err(Error::Unavailable(
             "no valid poses received during this run".into(),
@@ -378,6 +404,23 @@ fn run() -> Result<()> {
             }
             controller.stop()
         }
+        Command::Inspect { input, json } => {
+            controller.set_config(input.config(false)?)?;
+            controller.inspect_start()?;
+            let result = wait_operation(&controller, &interrupted);
+            let snapshot = controller.snapshot();
+            if json {
+                println!("{}", posebridge_core::snapshot_json(&snapshot)?);
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot.descriptor)
+                        .map_err(|e| Error::Internal(e.to_string()))?
+                );
+            }
+            result?;
+            controller.stop()
+        }
         Command::Diagnose {
             input,
             duration,
@@ -407,6 +450,7 @@ fn run() -> Result<()> {
             stream(&mut controller, config, duration, json, &interrupted)
         }
         Command::Simulate {
+            source_id,
             yaw,
             pitch,
             roll,
@@ -418,6 +462,7 @@ fn run() -> Result<()> {
             json,
         } => {
             let config = Config {
+                source_id,
                 source: Source::Simulate {
                     pattern: match pattern {
                         Trajectory::Fixed => Pattern::Fixed,
@@ -434,7 +479,11 @@ fn run() -> Result<()> {
             };
             stream(&mut controller, config, duration, json, &interrupted)
         }
-        Command::Configure { input, action } => {
+        Command::Configure {
+            input,
+            action,
+            json,
+        } => {
             let command = match action {
                 ConfigureAction::Rate { hz } => DeviceCommand::Rate { hz },
                 ConfigureAction::Output { format } => DeviceCommand::Output {
@@ -449,14 +498,31 @@ fn run() -> Result<()> {
                 ConfigureAction::MagStart => DeviceCommand::MagStart,
                 ConfigureAction::MagStop => DeviceCommand::MagStop,
                 ConfigureAction::Save => DeviceCommand::Save,
+                ConfigureAction::Algorithm { mode } => DeviceCommand::Algorithm {
+                    mode: match mode {
+                        Algorithm::SixAxis => AlgorithmMode::SixAxis,
+                        Algorithm::NineAxis => AlgorithmMode::NineAxis,
+                    },
+                },
+                ConfigureAction::ZeroYaw => DeviceCommand::ZeroYaw,
+                ConfigureAction::AngleReference => DeviceCommand::AngleReference,
+                ConfigureAction::ResetDefaults => DeviceCommand::ResetDefaults,
             };
             controller.set_config(input.config(false)?)?;
             controller.configure_device(command)?;
-            wait_operation(&controller, &interrupted)?;
-            println!(
-                "{}",
-                controller.status().configuration_report.unwrap_or_default()
-            );
+            let result = wait_operation(&controller, &interrupted);
+            if json {
+                println!(
+                    "{}",
+                    posebridge_core::snapshot_json(&controller.snapshot())?
+                );
+            } else {
+                println!(
+                    "{}",
+                    controller.status().configuration_report.unwrap_or_default()
+                );
+            }
+            result?;
             controller.stop()
         }
     }

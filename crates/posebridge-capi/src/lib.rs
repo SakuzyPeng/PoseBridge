@@ -8,7 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 
-pub const PB_ABI_VERSION: u32 = 200;
+pub const PB_ABI_VERSION: u32 = 300;
 pub const PB_OK: i32 = 0;
 pub const PB_INVALID_ARGUMENT: i32 = 1;
 pub const PB_NO_DATA: i32 = 2;
@@ -30,12 +30,20 @@ pub struct PbContext {
     error: Mutex<String>,
 }
 
-/// Initialize struct_size to sizeof(PbPose). All timestamps are session-relative host times.
+/// Current ABI only. Initialize struct_size; check pb_abi_version before use.
+/// Sample time has its own clock. Host received_ns is relative to the source session.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PbPose {
     pub struct_size: u32,
+    pub abi_version: u32,
     pub fresh: u32,
+    pub sample_time_kind: u32,
+    pub instance_id: u64,
+    pub reference_epoch: u64,
+    pub metadata_revision: u64,
+    pub sample_time_ms: u64,
+    pub sample_clock_epoch: u64,
     pub session_id: u64,
     pub sequence: u64,
     pub received_ns: u64,
@@ -51,21 +59,6 @@ pub struct PbPose {
     pub quaternion_received_ns: u64,
 }
 
-/// Experimental additive snapshot. Initialize only the outer struct_size.
-/// pose.received_ns is host monotonic time; sample_time_ms uses its own clock.
-/// kind 0: absent (time/epoch=0); 1: device calendar since 2000-01-01, NOT UTC;
-/// 2: synthetic elapsed time. Present clocks have nonzero epoch; compare within
-/// the same pose.session_id, kind and epoch only. Never subtract different clocks.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct PbPoseV2 {
-    pub struct_size: u32,
-    pub sample_time_kind: u32,
-    pub pose: PbPose,
-    pub sample_time_ms: u64,
-    pub sample_clock_epoch: u64,
-}
-
 /// Initialize struct_size to sizeof(PbStatus). State values are documented in docs/c-api.md.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -74,6 +67,11 @@ pub struct PbStatus {
     pub state: u32,
     pub session_id: u64,
     pub pose_count: u64,
+    pub session_samples: u64,
+    pub coalesced_samples: u64,
+    pub send_errors: u64,
+    pub telemetry_sent: u64,
+    pub delivery_reads: u64,
     pub bytes_received: u64,
     pub frames_received: u64,
     pub discarded_bytes: u64,
@@ -252,7 +250,7 @@ pub unsafe extern "C" fn pb_stop(value: *mut PbContext) -> i32 {
     })
 }
 
-/// Start device enumeration. Read completion and failure through pb_status/pb_status_json.
+/// Start device enumeration. Read completion and failure through pb_status/pb_snapshot_json.
 /// # Safety
 /// value is live and lifecycle/configuration calls are serialized.
 #[no_mangle]
@@ -264,6 +262,17 @@ pub unsafe extern "C" fn pb_scan_start(value: *mut PbContext, transport: u32, se
             _ => return Err(Failure(PB_INVALID_ARGUMENT, "unknown transport".into())),
         };
         lock(&context(value)?.controller).scan_start(kind, seconds)?;
+        Ok(())
+    })
+}
+
+/// Start a read-only hardware inspection while idle. Poll pb_snapshot_json for completion.
+/// # Safety
+/// value is live and lifecycle/configuration calls are serialized.
+#[no_mangle]
+pub unsafe extern "C" fn pb_inspect_start(value: *mut PbContext) -> i32 {
+    boundary(value, || {
+        lock(&context(value)?.controller).inspect_start()?;
         Ok(())
     })
 }
@@ -296,6 +305,13 @@ fn pose_to_c(p: &PoseSnapshot) -> PbPose {
         | (u32::from(p.raw.angular_velocity_dps.is_some()) << 4);
     PbPose {
         struct_size: std::mem::size_of::<PbPose>() as u32,
+        abi_version: PB_ABI_VERSION,
+        instance_id: p.instance_id,
+        reference_epoch: p.reference_epoch,
+        metadata_revision: p.metadata_revision,
+        sample_time_kind: p.sample_time.map_or(0, |t| t.kind as u32),
+        sample_time_ms: p.sample_time.map_or(0, |t| t.time_ms),
+        sample_clock_epoch: p.sample_time.map_or(0, |t| t.clock_epoch),
         fresh: u32::from(p.fresh),
         session_id: p.session_id,
         sequence: p.sequence,
@@ -314,37 +330,6 @@ fn pose_to_c(p: &PoseSnapshot) -> PbPose {
         motion_received_ns: p.raw.motion_received_ns.unwrap_or_default(),
         quaternion_received_ns: p.raw.quaternion_received_ns.unwrap_or_default(),
     }
-}
-
-/// Copy pose and sample time atomically from one acquisition snapshot.
-/// PB_NO_DATA before the first valid pose; undersized outputs are unchanged.
-/// # Safety
-/// value is live; out is aligned writable PbPoseV2 storage with struct_size initialized.
-#[no_mangle]
-pub unsafe extern "C" fn pb_latest_pose_v2(value: *const PbContext, out: *mut PbPoseV2) -> i32 {
-    boundary(value, || {
-        let ctx = context(value)?;
-        if out.is_null() {
-            return Err(Failure(PB_INVALID_ARGUMENT, "out is NULL".into()));
-        }
-        if (*out).struct_size < std::mem::size_of::<PbPoseV2>() as u32 {
-            return Err(Failure(
-                PB_BUFFER_TOO_SMALL,
-                "PbPoseV2 struct_size too small".into(),
-            ));
-        }
-        let p = lock(&ctx.controller)
-            .latest_pose()
-            .ok_or_else(|| Failure(PB_NO_DATA, "no pose received yet".into()))?;
-        *out = PbPoseV2 {
-            struct_size: std::mem::size_of::<PbPoseV2>() as u32,
-            sample_time_kind: p.sample_time.map_or(0, |t| t.kind as u32),
-            pose: pose_to_c(&p),
-            sample_time_ms: p.sample_time.map_or(0, |t| t.time_ms),
-            sample_clock_epoch: p.sample_time.map_or(0, |t| t.clock_epoch),
-        };
-        Ok(())
-    })
 }
 
 /// Copy the latest snapshot without waiting for new data. PB_NO_DATA before first pose.
@@ -372,7 +357,7 @@ pub unsafe extern "C" fn pb_latest_pose(value: *const PbContext, out: *mut PbPos
 }
 
 /// Copy current state and counters. State: 0 idle, 1 scanning, 2 connecting, 3 active, 4 stale,
-/// 5 reconnecting, 6 stopped, 7 failed, 8 configuring, 9 complete.
+/// 5 reconnecting, 6 stopped, 7 failed, 8 configuring, 9 complete, 10 inspecting.
 /// # Safety
 /// value is live and out is aligned writable PbStatus storage with struct_size initialized.
 #[no_mangle]
@@ -394,6 +379,11 @@ pub unsafe extern "C" fn pb_status(value: *const PbContext, out: *mut PbStatus) 
             state: s.state as u32,
             session_id: s.session_id,
             pose_count: s.pose_count,
+            session_samples: s.session_samples,
+            coalesced_samples: s.coalesced_samples,
+            send_errors: s.send_errors,
+            telemetry_sent: s.telemetry_sent,
+            delivery_reads: s.delivery.reads,
             bytes_received: s.bytes_received,
             frames_received: s.frames_received,
             discarded_bytes: s.discarded_bytes,
@@ -426,20 +416,19 @@ pub unsafe extern "C" fn pb_devices_json(
     })
 }
 
-/// Copy state, asynchronous error and configuration report as UTF-8 JSON.
+/// Atomically copy source information, observation, pose, counters and operation result as UTF-8 JSON.
 /// # Safety
 /// value is live; required is writable; buffer is writable for capacity bytes (NULL iff capacity=0).
 #[no_mangle]
-pub unsafe extern "C" fn pb_status_json(
+pub unsafe extern "C" fn pb_snapshot_json(
     value: *const PbContext,
     buffer: *mut c_char,
     capacity: u32,
     required: *mut u32,
 ) -> i32 {
     boundary(value, || {
-        let status = lock(&context(value)?.controller).status();
-        let text = serde_json::to_string(&status)
-            .map_err(|e| Failure(PB_INTERNAL_ERROR, e.to_string()))?;
+        let snapshot = lock(&context(value)?.controller).snapshot();
+        let text = posebridge_core::snapshot_json(&snapshot)?;
         copy_text(&text, buffer, capacity, required)
     })
 }

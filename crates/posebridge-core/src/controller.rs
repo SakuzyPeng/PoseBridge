@@ -1,5 +1,6 @@
+use crate::device::{self, Progress};
 use crate::model::*;
-use crate::osc::Sender;
+use crate::osc::{Sender, Telemetry};
 use crate::pose;
 use crate::protocol::{self, Frame, Parser};
 use crate::sample_clock::SampleClock;
@@ -17,6 +18,8 @@ pub const STALE_AFTER: Duration = Duration::from_millis(500);
 #[derive(Default)]
 struct Shared {
     status: StatusSnapshot,
+    descriptor: SourceDescriptor,
+    operation: Option<OperationStatus>,
     pose: Option<PoseSnapshot>,
     devices: Vec<DeviceInfo>,
     last_pose: Option<Instant>,
@@ -85,6 +88,31 @@ impl Controller {
     pub fn set_config(&mut self, config: Config) -> Result<()> {
         config.validate()?;
         self.ensure_idle()?;
+        let mut s = lock(&self.shared);
+        let changed = serde_json::to_value(&self.config).ok() != serde_json::to_value(&config).ok();
+        if changed {
+            let same_device = serde_json::to_value(&self.config.source).ok()
+                == serde_json::to_value(&config.source).ok();
+            let old = s.descriptor.clone();
+            let reference_changed = !same_device
+                || self.config.mounting != config.mounting
+                || self.config.pose_input != config.pose_input;
+            s.descriptor = SourceDescriptor::new(&config);
+            s.descriptor.metadata_revision = old.metadata_revision + 1;
+            s.descriptor.reference_epoch = old.reference_epoch + u64::from(reference_changed);
+            s.descriptor.reference_reason = if reference_changed {
+                "application_configuration_changed".into()
+            } else {
+                old.reference_reason
+            };
+            if same_device {
+                s.descriptor.device = old.device;
+                s.descriptor.device_name = old.device_name;
+            }
+            s.pose = None;
+            s.last_pose = None;
+            s.status = StatusSnapshot::default();
+        }
         self.config = config;
         Ok(())
     }
@@ -94,12 +122,23 @@ impl Controller {
     }
 
     pub fn start(&mut self) -> Result<()> {
-        self.config.validate()?;
+        self.config.validate_acquisition()?;
         self.ensure_idle()?;
         let config = self.config.clone();
-        *lock(&self.shared) = Shared::default();
-        lock(&self.shared).status.state = ConnectionState::Connecting;
-        self.launch(move |shared, cancel| run(config, shared, cancel));
+        {
+            let mut s = lock(&self.shared);
+            s.status = StatusSnapshot::default();
+            s.status.state = ConnectionState::Connecting;
+            s.descriptor.instance_id = new_id();
+            s.descriptor.session_id = 0;
+            s.descriptor.metadata_revision += 1;
+            s.pose = None;
+            s.last_pose = None;
+            s.first_pose = None;
+        }
+        self.launch(config.osc.clone(), move |shared, cancel| {
+            run(config, shared, cancel)
+        });
         Ok(())
     }
 
@@ -108,9 +147,12 @@ impl Controller {
             return Err(Error::Invalid("scan duration must be 1..60 seconds".into()));
         }
         self.ensure_idle()?;
-        *lock(&self.shared) = Shared::default();
-        lock(&self.shared).status.state = ConnectionState::Scanning;
-        self.launch(move |shared, mut cancel| async move {
+        {
+            let mut s = lock(&self.shared);
+            s.devices.clear();
+            s.status.state = ConnectionState::Scanning;
+        }
+        self.launch(None, move |shared, mut cancel| async move {
             let devices =
                 transport::scan(kind, Duration::from_secs(seconds as u64), &mut cancel).await?;
             lock(&shared).devices = devices;
@@ -119,32 +161,75 @@ impl Controller {
         Ok(())
     }
 
-    pub fn configure_device(&mut self, command: DeviceCommand) -> Result<()> {
+    pub fn inspect_start(&mut self) -> Result<()> {
         self.config.validate()?;
-        protocol::command_register(&command)?;
+        self.ensure_idle()?;
         if matches!(self.config.source, Source::Simulate { .. }) {
             return Err(Error::Invalid("simulator has no device registers".into()));
         }
-        self.ensure_idle()?;
         let source = self.config.source.clone();
-        *lock(&self.shared) = Shared::default();
-        lock(&self.shared).status.state = ConnectionState::Configuring;
-        self.launch(move |shared, mut cancel| async move {
+        {
+            let mut s = lock(&self.shared);
+            s.status.state = ConnectionState::Inspecting;
+            s.status.last_error = None;
+            s.status.configuration_report = None;
+            s.descriptor.device.valid = false;
+            s.descriptor.metadata_revision += 1;
+            let mut operation = OperationStatus::new("inspect".into());
+            operation.source_id = Some(s.descriptor.source_id.clone());
+            s.operation = Some(operation);
+        }
+        self.launch(None, move |shared, mut cancel| async move {
             let mut connection = Connection::open(&source, &mut cancel).await?;
-            let result = apply_command(&mut connection, &command, &mut cancel).await;
+            let name = connection.device_name(&source).await;
+            let result = device::inspect(&mut connection, &mut cancel).await;
             connection.close().await;
-            match result {
-                Ok(report) => {
-                    lock(&shared).status.configuration_report = Some(report);
-                    Ok(())
-                }
-                Err(e) => Err(e),
+            let observation = result?;
+            let mut s = lock(&shared);
+            s.descriptor.device = observation;
+            s.descriptor.device_name = name;
+            s.descriptor.metadata_revision += 1;
+            if let Some(op) = &mut s.operation {
+                op.register_verified = true; op.outcome = OperationOutcome::Succeeded;
+                op.message = Some("read-only inspection complete; capabilities and calibration quality are not inferred from register access".into());
             }
+            Ok(())
         });
         Ok(())
     }
 
-    fn launch<F, Fut>(&mut self, work: F)
+    pub fn configure_device(&mut self, command: DeviceCommand) -> Result<()> {
+        self.config.validate()?;
+        protocol::command_register(&command)?;
+        self.ensure_idle()?;
+        if matches!(self.config.source, Source::Simulate { .. }) {
+            return Err(Error::Invalid("simulator has no device registers".into()));
+        }
+        let source = self.config.source.clone();
+        let action =
+            serde_json::to_value(&command).map_err(|e| Error::Internal(e.to_string()))?["action"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+        {
+            let mut s = lock(&self.shared);
+            s.status.state = ConnectionState::Configuring;
+            s.status.last_error = None;
+            s.status.configuration_report = None;
+            let mut operation = OperationStatus::new(action);
+            operation.source_id = Some(s.descriptor.source_id.clone());
+            s.operation = Some(operation);
+        }
+        self.launch(None, move |shared, mut cancel| async move {
+            let mut connection = Connection::open(&source, &mut cancel).await?;
+            let result = control_connection(&shared, &mut connection, &command, &mut cancel).await;
+            connection.close().await;
+            result
+        });
+        Ok(())
+    }
+
+    fn launch<F, Fut>(&mut self, osc: Option<OscConfig>, work: F)
     where
         F: FnOnce(SharedRef, watch::Receiver<bool>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
@@ -159,22 +244,45 @@ impl Controller {
             .expect("live controller runtime")
             .spawn(async move {
                 let _complete = complete;
-                let result = AssertUnwindSafe(work(shared.clone(), rx))
-                    .catch_unwind()
-                    .await;
-                let mut s = lock(&shared);
-                match result {
-                    Ok(Ok(())) => s.status.state = ConnectionState::Complete,
-                    Ok(Err(Error::Cancelled)) => s.status.state = ConnectionState::Stopped,
-                    Ok(Err(e)) => {
-                        s.status.state = ConnectionState::Failed;
-                        s.status.last_error = Some(e.to_string());
+                let future = AssertUnwindSafe(work(shared.clone(), rx)).catch_unwind();
+                tokio::pin!(future);
+                let mut telemetry = osc.as_ref().and_then(|config| match Telemetry::new(config) {
+                    Ok(value) => Some(value),
+                    Err(e) => { lock(&shared).status.last_error = Some(e.to_string()); None }
+                });
+                let mut tick = tokio::time::interval(Duration::from_millis(20));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let result = loop {
+                    tokio::select! {
+                        result = &mut future => break result,
+                        _ = tick.tick(), if telemetry.is_some() => send_telemetry(&shared, &mut telemetry, false),
                     }
-                    Err(_) => {
-                        s.status.state = ConnectionState::Failed;
-                        s.status.last_error = Some("internal worker panic".into());
+                };
+                {
+                    let mut s = lock(&shared);
+                    match result {
+                        Ok(Ok(())) => s.status.state = ConnectionState::Complete,
+                        Ok(Err(Error::Cancelled)) => {
+                            s.status.state = ConnectionState::Stopped;
+                            if let Some(op) = &mut s.operation && op.outcome == OperationOutcome::Running {
+                                op.outcome = OperationOutcome::Cancelled;
+                            }
+                        },
+                        Ok(Err(e)) => {
+                            s.status.state = ConnectionState::Failed;
+                            s.status.last_error = Some(e.to_string());
+                            if let Some(op) = &mut s.operation && op.outcome == OperationOutcome::Running {
+                                op.outcome = OperationOutcome::Failed; op.message = Some(e.to_string());
+                            }
+                        },
+                        Err(_) => {
+                            s.status.state = ConnectionState::Failed;
+                            s.status.last_error = Some("internal worker panic".into());
+                            if let Some(op) = &mut s.operation && op.outcome == OperationOutcome::Running { op.outcome = OperationOutcome::Failed; }
+                        },
                     }
                 }
+                send_telemetry(&shared, &mut telemetry, true);
             });
         self.task = Some(Task {
             cancel,
@@ -199,21 +307,14 @@ impl Controller {
         Ok(())
     }
 
-    pub fn status(&self) -> StatusSnapshot {
-        let s = lock(&self.shared);
-        let mut status = s.status.clone();
-        if status.state == ConnectionState::Active && !fresh(&s, Instant::now()) {
-            status.state = ConnectionState::Stale;
-        }
-        status
+    pub fn snapshot(&self) -> Snapshot {
+        snapshot(&self.shared)
     }
-
+    pub fn status(&self) -> StatusSnapshot {
+        self.snapshot().status
+    }
     pub fn latest_pose(&self) -> Option<PoseSnapshot> {
-        let s = lock(&self.shared);
-        s.pose.clone().map(|mut p| {
-            p.fresh = fresh(&s, Instant::now());
-            p
-        })
+        self.snapshot().pose
     }
 
     pub fn devices(&self) -> Vec<DeviceInfo> {
@@ -230,13 +331,143 @@ impl Drop for Controller {
     }
 }
 
+async fn control_connection(
+    shared: &SharedRef,
+    connection: &mut Connection,
+    command: &DeviceCommand,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<()> {
+    let result = device::execute(connection, command, cancel, |event| {
+        let mut s = lock(shared);
+        match event {
+            Progress::WriteAttempt {
+                reference,
+                persistent,
+            } => {
+                s.descriptor.device.valid = false;
+                s.descriptor.metadata_revision += 1;
+                if reference {
+                    invalidate_reference(&mut s, "device_control");
+                }
+                if let Some(op) = &mut s.operation {
+                    op.write_attempted = true;
+                    if persistent {
+                        op.persistence = "unverified".into();
+                    }
+                }
+            }
+            Progress::CommandSent => {
+                if let Some(op) = &mut s.operation {
+                    op.command_sent = true;
+                }
+            }
+            Progress::RegisterVerified => {
+                if let Some(op) = &mut s.operation {
+                    op.register_verified = true;
+                }
+            }
+            Progress::CompletionObserved => {
+                if let Some(op) = &mut s.operation {
+                    op.completion_observed = true;
+                }
+            }
+        }
+    })
+    .await;
+    match result {
+        Ok((outcome, message, observation)) => {
+            let mut s = lock(shared);
+            if let Some(observation) = observation {
+                s.descriptor.device = observation;
+            }
+            s.status.configuration_report = Some(message.clone());
+            if let Some(op) = &mut s.operation {
+                op.outcome = outcome;
+                op.message = Some(message);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let mut s = lock(shared);
+            if s.operation.as_ref().is_some_and(|op| op.write_attempted) {
+                invalidate_reference(&mut s, "device_control_uncertain");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn invalidate_reference(s: &mut Shared, reason: &str) {
+    if !s
+        .operation
+        .as_ref()
+        .is_some_and(|op| op.reference_may_have_changed)
+    {
+        s.descriptor.reference_epoch += 1;
+    }
+    s.descriptor.reference_reason = reason.into();
+    s.descriptor.metadata_revision += 1;
+    if let Some(op) = &mut s.operation {
+        op.reference_may_have_changed = true;
+    }
+}
+
+fn snapshot(shared: &SharedRef) -> Snapshot {
+    let s = lock(shared);
+    let is_fresh = fresh(&s, Instant::now());
+    let mut status = s.status.clone();
+    if status.state == ConnectionState::Active && !is_fresh {
+        status.state = ConnectionState::Stale;
+    }
+    Snapshot {
+        schema: PROTOCOL_VERSION,
+        descriptor: s.descriptor.clone(),
+        status,
+        pose: s.pose.clone().map(|mut p| {
+            p.fresh = is_fresh;
+            p
+        }),
+        operation: s.operation.clone(),
+    }
+}
+
+fn send_telemetry(shared: &SharedRef, telemetry: &mut Option<Telemetry>, force: bool) {
+    if let Some(telemetry) = telemetry {
+        let previous_errors = telemetry.send_errors();
+        match telemetry.refresh(&snapshot(shared), force, Instant::now()) {
+            Ok(count) => lock(shared).status.telemetry_sent += count,
+            Err(error) => {
+                let mut s = lock(shared);
+                if telemetry.send_errors() == previous_errors {
+                    s.status.send_errors += 1;
+                }
+                s.status.last_error = Some(error.to_string());
+            }
+        }
+        lock(shared).status.send_errors += telemetry.send_errors() - previous_errors;
+    }
+}
+
 fn begin_session(shared: &SharedRef) {
     let mut s = lock(shared);
-    let reconnect_count = s.status.reconnect_count;
-    *s = Shared::default();
-    // Positive OSC int64, randomized across process restarts and reconnections.
-    s.status.session_id = (uuid::Uuid::new_v4().as_u128() as u64 & i64::MAX as u64).max(1);
-    s.status.reconnect_count = reconnect_count;
+    if s.descriptor.session_id != 0 {
+        s.descriptor.reference_epoch += 1;
+        s.descriptor.reference_reason = "reconnected".into();
+        s.descriptor.device.valid = false;
+    }
+    s.pose = None;
+    s.last_pose = None;
+    s.first_pose = None;
+    if s.descriptor.instance_id == 0 {
+        s.descriptor.instance_id = new_id();
+    }
+    s.status.session_id = new_id();
+    s.status.session_samples = 0;
+    s.status.actual_rate_hz = 0.0;
+    s.status.interval_min_ms = 0.0;
+    s.status.interval_max_ms = 0.0;
+    s.descriptor.session_id = s.status.session_id;
+    s.descriptor.metadata_revision += 1;
     s.status.state = ConnectionState::Connecting;
 }
 
@@ -253,7 +484,7 @@ fn publish(
     let mut s = lock(shared);
     if let Some(last) = s.last_pose {
         let gap = now.duration_since(last).as_secs_f64() * 1000.0;
-        if s.status.pose_count == 1 || gap < s.status.interval_min_ms {
+        if s.status.session_samples == 1 || gap < s.status.interval_min_ms {
             s.status.interval_min_ms = gap;
         }
         s.status.interval_max_ms = s.status.interval_max_ms.max(gap);
@@ -261,16 +492,20 @@ fn publish(
     let first = *s.first_pose.get_or_insert(now);
     s.last_pose = Some(now);
     s.status.pose_count += 1;
+    s.status.session_samples += 1;
     let elapsed = now.duration_since(first).as_secs_f64();
     s.status.actual_rate_hz = if elapsed > 0.0 {
-        (s.status.pose_count - 1) as f64 / elapsed
+        (s.status.session_samples - 1) as f64 / elapsed
     } else {
         0.0
     };
     s.status.state = ConnectionState::Active;
     s.pose = Some(PoseSnapshot {
+        instance_id: s.descriptor.instance_id,
+        reference_epoch: s.descriptor.reference_epoch,
+        metadata_revision: s.descriptor.metadata_revision,
         session_id: s.status.session_id,
-        sequence: s.status.pose_count,
+        sequence: s.status.session_samples,
         received_ns: now.duration_since(start).as_nanos().min(i64::MAX as u128) as u64,
         sample_time,
         quaternion_xyzw: q,
@@ -283,20 +518,32 @@ fn publish(
 
 fn emit(shared: &SharedRef, sender: &mut Option<Sender>) -> Result<()> {
     let now = Instant::now();
-    let pose = {
-        let mut s = lock(shared);
-        if s.status.state == ConnectionState::Active && !fresh(&s, now) {
-            s.status.state = ConnectionState::Stale;
-        }
-        s.pose.clone().map(|mut p| {
+    let (pose, source_id, age_ns) = {
+        let s = lock(shared);
+        let pose = s.pose.clone().map(|mut p| {
             p.fresh = fresh(&s, now);
             p
-        })
+        });
+        (
+            pose,
+            s.descriptor.source_id.clone(),
+            s.last_pose.map_or(0, |at| {
+                now.duration_since(at).as_nanos().min(i64::MAX as u128) as u64
+            }),
+        )
     };
-    if let (Some(sender), Some(pose)) = (sender, pose)
-        && sender.send_if_due(&pose, now)?
-    {
-        lock(shared).status.osc_sent += 1;
+    if let Some(sender) = sender {
+        let previous_errors = sender.send_errors();
+        let sent = if let Some(pose) = pose {
+            sender.send_if_due(&pose, &source_id, age_ns, now)?
+        } else {
+            sender.clear_pending();
+            false
+        };
+        let mut s = lock(shared);
+        s.status.osc_sent += u64::from(sent);
+        s.status.coalesced_samples = sender.coalesced_samples();
+        s.status.send_errors += sender.send_errors() - previous_errors;
     }
     Ok(())
 }
@@ -371,10 +618,18 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
         let result = match attempt {
             Ok(mut connection) => {
                 begin_session(&shared);
+                let name = connection.device_name(&config.source).await;
+                {
+                    let mut state = lock(&shared);
+                    if state.descriptor.device_name != name {
+                        state.descriptor.device_name = name;
+                        state.descriptor.metadata_revision += 1;
+                    }
+                }
                 let result =
                     pump(&config, &shared, &mut connection, &mut sender, &mut cancel).await;
                 connection.close().await;
-                if lock(&shared).status.pose_count > 0 {
+                if lock(&shared).status.session_samples > 0 {
                     backoff = 1;
                 }
                 result
@@ -438,6 +693,8 @@ async fn pump(
                 let bytes = bytes?;
                 last_bytes = Instant::now();
                 let ns = last_bytes.duration_since(start).as_nanos().min(i64::MAX as u128) as u64;
+                let old_discarded = parser.discarded_bytes;
+                let old_invalid = parser.invalid_frames;
                 let frames = parser.push(&bytes);
                 {
                     let mut state = lock(shared);
@@ -492,11 +749,12 @@ async fn pump(
                         match q {
                             Ok(q) => {
                                 let sample_time = if let Some(ms) = sample_time_ms {
+                                    let old_discontinuities = sample_clock.discontinuities;
                                     let Some(time) = sample_clock.observe(SampleTimeKind::DeviceCalendar, ms, ns) else {
-                                        lock(shared).status.duplicate_sample_times = sample_clock.duplicates;
+                                        lock(shared).status.duplicate_sample_times += 1;
                                         continue;
                                     };
-                                    lock(shared).status.clock_discontinuities = sample_clock.discontinuities;
+                                    lock(shared).status.clock_discontinuities += sample_clock.discontinuities - old_discontinuities;
                                     Some(time)
                                 } else { None };
                                 if publish(shared,q,&raw,start,last_bytes,sample_time).is_err() {
@@ -509,8 +767,8 @@ async fn pump(
                 }
                 {
                     let mut state = lock(shared);
-                    state.status.discarded_bytes = parser.discarded_bytes;
-                    state.status.invalid_frames = parser.invalid_frames;
+                    state.status.discarded_bytes += parser.discarded_bytes - old_discarded;
+                    state.status.invalid_frames += parser.invalid_frames - old_invalid;
                 }
                 emit(shared,sender)?;
             },
@@ -543,154 +801,6 @@ async fn pump(
     }
 }
 
-async fn read_back(
-    connection: &mut Connection,
-    address: u16,
-    cancel: &mut watch::Receiver<bool>,
-) -> Result<u16> {
-    read_back_matching(connection, address, None, cancel).await
-}
-
-async fn read_back_matching(
-    connection: &mut Connection,
-    address: u16,
-    expected: Option<u16>,
-    cancel: &mut watch::Receiver<bool>,
-) -> Result<u16> {
-    let mut last_observed = None;
-    transport::cancel_after(cancel, Duration::from_secs(3), async {
-        let request = protocol::read_register(address);
-        connection.write(&request).await?;
-        let mut retry_at = Instant::now() + Duration::from_millis(250);
-        let mut parser = Parser::default();
-        loop {
-            // A BLE disconnect can briefly suppress USB register replies. Retry
-            // only the read within the existing bounded timeout, never the write.
-            tokio::select! {
-                _ = tokio::time::sleep_until(retry_at.into()) => {
-                    connection.write(&request).await?;
-                    retry_at = Instant::now() + Duration::from_millis(250);
-                },
-                bytes = connection.read() => {
-                    for frame in parser.push(&bytes?) {
-                        if let Frame::Registers { address: base, values } = frame
-                            && address >= base && address - base < 8 {
-                            let observed = values[(address - base) as usize] as u16;
-                            last_observed = Some(observed);
-                            if expected.is_none_or(|wanted| wanted == observed) {
-                                return Ok(observed);
-                            }
-                            // A queued preflight reply or configuration transition
-                            // may still report the old value. Keep reading, never
-                            // repeat the write or treat an old reply as success.
-                        }
-                    }
-                },
-            }
-        }
-    })
-    .await
-    .map_err(|e| match e {
-        Error::Timeout(_) => match (expected, last_observed) {
-            (Some(wanted), Some(observed)) => Error::Protocol(format!(
-                "register 0x{address:02x}: requested {wanted}, read back {observed} after verification timeout"
-            )),
-            _ => Error::Timeout(format!("readback register 0x{address:02x}")),
-        },
-        other => other,
-    })
-}
-
-async fn apply_command(
-    connection: &mut Connection,
-    command: &DeviceCommand,
-    cancel: &mut watch::Receiver<bool>,
-) -> Result<String> {
-    let (address, value) = protocol::command_register(command)?;
-    if matches!(command, DeviceCommand::Output { .. }) {
-        // On older firmware 0x0E is D0MODE. Refuse ambiguous values before unlocking.
-        let current = read_back(connection, 0x0e, cancel).await?;
-        if !matches!(current, 0x61 | 0x81 | 0x84 | 0xa4) {
-            return Err(Error::Protocol(format!(
-                "output selection requires verified new firmware (0x0E is 0x{current:04x})"
-            )));
-        }
-    }
-    transport::cancel_after(
-        cancel,
-        Duration::from_secs(2),
-        connection.write(&protocol::UNLOCK),
-    )
-    .await?;
-    transport::cancel_after(cancel, Duration::from_secs(1), async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        Ok(())
-    })
-    .await?;
-    transport::cancel_after(
-        cancel,
-        Duration::from_secs(2),
-        connection.write(&protocol::write_register(address, value)),
-    )
-    .await?;
-    if matches!(
-        command,
-        DeviceCommand::Rate { .. } | DeviceCommand::Output { .. }
-    ) {
-        // Firmware may ignore an immediately adjacent read while applying stream
-        // settings. This delay matches the verified USB configuration sequence.
-        // Do not delay calibration-start observation, which can auto-clear.
-        transport::cancel_after(cancel, Duration::from_secs(1), async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            Ok(())
-        })
-        .await?;
-    }
-    let expected = matches!(
-        command,
-        DeviceCommand::Rate { .. } | DeviceCommand::Output { .. }
-    )
-    .then_some(value);
-    let observed = read_back_matching(connection, address as u16, expected, cancel).await?;
-    if matches!(command, DeviceCommand::AccelCalibrate) {
-        // This action auto-clears CALSW. A quick zero readback cannot prove that calibration started.
-        if observed != 1 {
-            return Err(Error::Protocol(format!(
-                "calibration command sent; start not observed (CALSW={observed}), completion unverified"
-            )));
-        }
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(8) {
-            transport::cancel_after(cancel, Duration::from_secs(1), async {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                Ok(())
-            })
-            .await?;
-            if read_back(connection, address as u16, cancel).await? == 0 {
-                return Ok(
-                    "CALSW start and completion observed; accuracy requires a separate measurement"
-                        .into(),
-                );
-            }
-        }
-        return Err(Error::Timeout(
-            "calibration completion was not observed".into(),
-        ));
-    }
-    if observed != value {
-        return Err(Error::Protocol(format!(
-            "register 0x{address:02x}: requested {value}, read back {observed}"
-        )));
-    }
-    Ok(if matches!(command, DeviceCommand::Save) {
-        "save command sent; SAVE register readback matched; persistence requires a power-cycle check".into()
-    } else {
-        format!(
-            "register 0x{address:02x} readback verified: {observed}; output rate/accuracy still require measurement"
-        )
-    })
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -698,6 +808,182 @@ mod tests {
     use std::net::UdpSocket;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_serial::SerialStream;
+
+    async fn fake_device(
+        algorithm: u16,
+    ) -> (
+        Connection,
+        Arc<Mutex<Vec<[u8; 5]>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let seen = commands.clone();
+        let task = tokio::spawn(async move {
+            let mut registers = [0u16; 128];
+            registers[3] = 9;
+            registers[0x0e] = 0x84;
+            registers[0x1f] = 4;
+            registers[0x24] = algorithm;
+            registers[0x2e] = 13115;
+            let mut bytes = [0u8; 5];
+            while device.read_exact(&mut bytes).await.is_ok() {
+                seen.lock().unwrap().push(bytes);
+                if bytes[2] == 0x27 {
+                    let address = u16::from_le_bytes([bytes[3], bytes[4]]) as usize;
+                    let mut reply = [0u8; 20];
+                    reply[..4].copy_from_slice(&[0x55, 0x71, bytes[3], bytes[4]]);
+                    for i in 0..8 {
+                        reply[4 + 2 * i..6 + 2 * i]
+                            .copy_from_slice(&registers[address + i].to_le_bytes());
+                    }
+                    if address == 1 && registers[1] == 1 {
+                        registers[1] = 0;
+                    }
+                    device.write_all(&reply).await.unwrap();
+                } else if bytes[2] != 0x69 {
+                    let address = bytes[2] as usize;
+                    let value = u16::from_le_bytes([bytes[3], bytes[4]]);
+                    if address == 0 && value == 1 {
+                        registers[3] = 6;
+                        registers[0x0e] = 0x61;
+                        registers[0x24] = 0;
+                    } else if address == 1 && [4, 8].contains(&value) {
+                        registers[1] = 0;
+                    } else {
+                        registers[address] = value;
+                    }
+                }
+            }
+        });
+        (Connection::Usb(host), commands, task)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inspection_is_read_only_and_device_controls_have_explicit_effects() {
+        let (mut connection, commands, server) = fake_device(0).await;
+        let (_tx, mut cancel) = watch::channel(false);
+        let observation = device::inspect(&mut connection, &mut cancel).await.unwrap();
+        assert!(observation.valid);
+        assert_eq!(observation.rate_hz, Some(100.));
+        assert_eq!(observation.algorithm, Some(AlgorithmMode::NineAxis));
+        assert_eq!(observation.firmware_version, Some("13115".into()));
+        assert_eq!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c[2])
+                .collect::<Vec<_>>(),
+            vec![0x27; 4]
+        );
+        commands.lock().unwrap().clear();
+        assert!(matches!(
+            device::execute(
+                &mut connection,
+                &DeviceCommand::ZeroYaw,
+                &mut cancel,
+                |_| {}
+            )
+            .await,
+            Err(Error::Invalid(_))
+        ));
+        assert_eq!(
+            *commands.lock().unwrap(),
+            vec![protocol::read_register(0x24)]
+        );
+        for command in [
+            DeviceCommand::Algorithm {
+                mode: AlgorithmMode::SixAxis,
+            },
+            DeviceCommand::ZeroYaw,
+            DeviceCommand::AngleReference,
+            DeviceCommand::ResetDefaults,
+        ] {
+            commands.lock().unwrap().clear();
+            let shared = Arc::new(Mutex::new(Shared::default()));
+            {
+                let mut state = lock(&shared);
+                state.descriptor.device = observation.clone();
+                state.operation = Some(OperationStatus::new(format!("{command:?}")));
+            }
+            control_connection(&shared, &mut connection, &command, &mut cancel)
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let state = lock(&shared);
+            let op = state.operation.as_ref().unwrap();
+            assert!(op.command_sent && op.reference_may_have_changed);
+            assert_eq!(state.descriptor.reference_epoch, 2);
+            let writes: Vec<_> = commands
+                .lock()
+                .unwrap()
+                .iter()
+                .copied()
+                .filter(|c| c[2] != 0x27 && c[2] != 0x69)
+                .collect();
+            match command {
+                DeviceCommand::Algorithm { .. } => {
+                    assert_eq!(writes, vec![protocol::write_register(0x24, 1)]);
+                    assert!(op.register_verified);
+                    assert!(!state.descriptor.device.valid);
+                }
+                DeviceCommand::ZeroYaw => {
+                    assert_eq!(writes, vec![protocol::write_register(1, 4)]);
+                    assert_eq!(op.outcome, OperationOutcome::Unverified);
+                }
+                DeviceCommand::AngleReference => {
+                    assert_eq!(
+                        writes,
+                        vec![
+                            protocol::write_register(1, 8),
+                            protocol::write_register(0, 0)
+                        ]
+                    );
+                    assert_eq!(op.persistence, "unverified");
+                }
+                DeviceCommand::ResetDefaults => {
+                    assert_eq!(writes, vec![protocol::write_register(0, 1)]);
+                    assert!(op.register_verified && state.descriptor.device.valid);
+                    assert_eq!(state.descriptor.device.rate_hz, Some(10.));
+                }
+                _ => unreachable!(),
+            }
+        }
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_after_write_invalidates_reference_without_repeating_write() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        lock(&shared).operation = Some(OperationStatus::new("rate".into()));
+        lock(&shared).descriptor.device.valid = true;
+        let observed = shared.clone();
+        let (tx, mut cancel) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            control_connection(
+                &shared,
+                &mut connection,
+                &DeviceCommand::Rate { hz: 100 },
+                &mut cancel,
+            )
+            .await
+        });
+        let mut bytes = [0u8; 5];
+        device.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, protocol::UNLOCK);
+        device.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, protocol::write_register(3, 9));
+        tx.send(true).unwrap();
+        assert!(matches!(worker.await.unwrap(), Err(Error::Cancelled)));
+        let s = lock(&observed);
+        assert!(!s.descriptor.device.valid);
+        assert_eq!(s.descriptor.reference_epoch, 2);
+        assert_eq!(s.descriptor.reference_reason, "device_control_uncertain");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn timestamp_stream_duplicates_stale_reset_and_absent_metadata() {
@@ -865,7 +1151,6 @@ mod tests {
                 target: socket.local_addr().unwrap(),
                 max_rate_hz: 50,
                 format: OscFormat::Euler,
-                version: OscVersion::V1,
             }),
             ..Config::default()
         };
@@ -899,13 +1184,13 @@ mod tests {
             let rosc::OscPacket::Message(message) = packet else {
                 panic!("wrong OSC packet");
             };
-            assert_eq!(message.addr, "/posebridge/v1/euler");
+            assert_eq!(message.addr, "/posebridge/euler");
             let expected = [
                 -5239.0 / 32768.0 * 180.0,
                 97.0 / 32768.0 * 180.0,
                 139.0 / 32768.0 * 180.0,
             ];
-            for (arg, value) in message.args.iter().zip(expected) {
+            for (arg, value) in message.args.iter().skip(13).zip(expected) {
                 let rosc::OscType::Float(actual) = arg else {
                     panic!("wrong type");
                 };
@@ -940,7 +1225,7 @@ mod tests {
         let mut connection = Connection::Usb(host);
         let (tx, mut cancel) = watch::channel(false);
         let worker = tokio::spawn(async move {
-            read_back_matching(&mut connection, 0x0e, Some(0x84), &mut cancel).await
+            device::read_registers(&mut connection, 0x0e, Some(0x84), &mut cancel).await
         });
         let mut command = [0u8; 5];
         for _ in 0..2 {
@@ -960,7 +1245,7 @@ mod tests {
         assert_eq!(command, protocol::read_register(0x0e));
         response[4] = 0x84;
         device.write_all(&response).await.unwrap();
-        assert_eq!(worker.await.unwrap().unwrap(), 0x84);
+        assert_eq!(worker.await.unwrap().unwrap()[0], 0x84);
         drop(tx);
     }
 
@@ -988,12 +1273,13 @@ mod tests {
                 }
             });
             let (_tx, mut cancel) = watch::channel(false);
-            let result = apply_command(
+            let result = device::execute(
                 &mut connection,
                 &DeviceCommand::Output {
                     format: OutputProfile::TimestampQuaternion,
                 },
                 &mut cancel,
+                |_| {},
             )
             .await;
             assert_eq!(result.is_err(), current == 1 || wrong);
@@ -1056,7 +1342,8 @@ mod tests {
                 }
             });
             let (_tx, mut cancel) = watch::channel(false);
-            let result = apply_command(&mut connection, &command, &mut cancel).await;
+            let result = device::execute(&mut connection, &command, &mut cancel, |_| {}).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
             assert_eq!(result.is_err(), wrong, "{result:?}");
             let sent = commands.lock().unwrap().clone();
             assert_eq!(sent[0], protocol::UNLOCK);

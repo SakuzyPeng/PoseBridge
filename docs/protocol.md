@@ -1,56 +1,35 @@
-# 协议、坐标和数据时效
+# PoseBridge 当前协议与坐标
 
-## 输入协议依据
+适用于 PoseBridge 0.3。**只支持一套协议，版本号为 3**。之前的 v1/v2 草案地址与选择开关已删除；消费者须同步升级。
 
-以维特[官方 BLE 5.0 SDK 解析器](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0/blob/9efaab0fdd6a06dc807bf80402e58aa91b431c6f/Python/BWT901BLE5.0_python_sdk/device_model.py)
-为数据格式依据，自行实现 Rust 解析与异步传输。
-服务 UUID 为 `0000ffe5-0000-1000-8000-00805f9a34fb`，通知为 `0000ffe4-0000-1000-8000-00805f9a34fb`，
-写入为 `0000ffe9-0000-1000-8000-00805f9a34fb`。不假定广播一定包含服务 UUID，连接后验证实际特征属性。
+## 设备输入
 
-默认流和寄存器回复为 20 字节帧，偏移从 0 开始，小端有符号 int16：
+BLE 服务 `0000ffe5-0000-1000-8000-00805f9a34fb`，通知 `ffe4`，写入 `ffe9`（均使用同一 Bluetooth 基础 UUID）。
+USB 默认 115200、8N1、无流控。连接后验证特征；普通采集保留设备配置，不后台轮询配置寄存器。
 
-| 帧 | 内容 |
-|---|---|
-| `55 61` | 2–7：加速度 `/32768*16` g；8–13：角速度 `/32768*2000` °/s；14–19：XYZ 角度 `/32768*180` ° |
-| `55 71` | 2–3：起始寄存器地址；4–19：连续 8 个寄存器 |
-| 地址 `0x51` | 前 4 个值 `/32768`，按 Q0=w、Q1=x、Q2=y、Q3=z 解释 |
+| 帧标志 | 总字节数 | 内容 |
+|---|---:|---|
+| `0x61` | 20 | 加速度 XYZ、角速度 XYZ、Euler XYZ |
+| `0x01` / `0x04` | 8 / 10 | Euler / 原生四元数 |
+| `0x81` / `0x84` | 16 / 18 | 设备时间＋Euler / 设备时间＋四元数 |
+| `0xA4` | 24 | 设备时间＋角速度＋四元数 |
+| `0x71` | 20 | 起始寄存器地址和连续 8 个寄存器 |
 
-该格式没有在参考示例中提供独立校验和，不能声称通过 CRC 验证。解析器限制部分帧缓冲大小，按帧头同步，
-记录丢弃字节和无效姿态；已对真实 USB 样本和 BLE 数据验证格式。其他型号的 11 字节协议不自动混用。
+帧头为 `55 flag`。int16 小端：加速度 `/32768*16` g，角速度 `/32768*2000` °/s，Euler `/32768*180` °，
+四元数 `/32768`，设备顺序 W/X/Y/Z。原生通知四元数范数平方要求 `[0.81,1.21]`。解析器支持拆包、粘包和重新同步，部分帧缓冲最多 24 字节。
+这些帧没有独立校验和，合法日期与范数检查不等于 CRC。未支持的长输出格式不自动启用。
 
-四元数通过 `FF AA 27 51 00` 单独读取；只有新的寄存器响应产生四元数姿态样本。
-读取使用独立截止时间，最多一个未完成请求；相邻请求至少相隔 20 ms，250 ms 无响应才重试。
-串口命令异步写入驱动队列，不在采集线程调用可能阻塞的 `tcdrain`／`FlushFileBuffers`；配置核验以寄存器响应为准。
-默认连续角度模式不发送读取或配置命令。
+时间字段为 8 字节：`year-2000, month, day, hour, minute, second, millis-low, millis-high`，
+按公历验证，转换为设备时钟自 2000-01-01 的整数毫秒，**不是 UTC**。同批各帧共享主机接收时刻，保留各自设备时间。
+时间只归属同一姿态帧，寄存器四元数与无时间帧不会继承缓存时间。
+重复设备时间不产生新姿态；倒退、时钟类型变化或前进超过主机间隔加 2000 ms 时递增时钟代次。
 
-新版 `0x81/0x84/0xA4` 的时间戳角度、原生四元数和角速度组合已接入正式核心库、CLI 与 C ABI。
-可用 `configure ... output --format ...` 显式选择，默认连接仍保留配置。字段与版本约定见[时间戳与 OSC v2](timestamps.md)。
+## 坐标
 
-显式配置先发送 `FF AA 69 88 B5` 解锁，等待 100 ms，再写寄存器并读回。
-回传率和输出格式写入后再等待 100 ms，让固件应用配置；读回在总计 3 秒内每 250 ms 重试只读请求，
-避免 BLE 断开后短暂忽略 USB 请求。速率／格式核验遇到旧值时继续只读查询，直至目标值匹配或预算用完；
-持续不匹配返回带实际值的错误。不重试配置写入／校准；超时不能证明写入未发生。
-速率寄存器为 `0x03`，10／50／100／200 Hz 分别为 `0x06`／`0x08`／`0x09`／`0x0B`。
-速率表依据[官方 REG.h](https://github.com/WITMOTION/WitStandardProtocol_JY901/blob/main/Arduino/Arduino_sdk/REG.h)，
-写入方式和校准命令依据[BLE SDK](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0/blob/9efaab0fdd6a06dc807bf80402e58aa91b431c6f/Windows_C%23/Wit.Example_BWT901BLE/ble5/BWT901BLE.cs)。
-回读不匹配、未观察到校准完成或超时均返回失败，不自动重复校准。
-
-## 坐标边界
-
-原始角度按 WIT 的 XYZ 欧拉角解释为 `Rz(Z) Ry(Y) Rx(X)`；原始四元数为设备姿态，不直接作为输出四元数。
-安装映射给出传感器轴到头部右／前／上的正交右手基底 M；先对完整旋转做 `M R_sensor M^T`。
-这里同时重表达设备参考基底和机身基底，听音参考方向随后由接收端回正确定。
-
-头部场景基底为 X 右、Y 前、Z 上。由变换后的矩阵提取 `Rz(yaw) Rx(pitch) Ry(roll)` 的角度，再按输出约定构造四元数。
-不能通过任意交换四元数分量代替这一过程。
-
-输出约定与 MacinRender 当前 GUI 对齐：yaw 正向左转，pitch 正向抬头，roll 正向右倾，单位度。
-Hamilton 四元数顺序 **x,y,z,w**，`q = q_y(yaw) * q_x(pitch) * q_z(roll)`，右侧旋转先应用。
-这是 GUI 的 YXZ 姿态表示，不是音频场景 ZXY 或 SOFA 空间轴下的原始物理四元数。
-`q` 与 `-q` 等价；接收端插值应取短弧。正常头部动作先覆盖 `|pitch| <= 85°`，极点附近仍存在欧拉角边界。
-
-安装映射是显式配置，桥接 CLI 必须给出 `--mount`；诊断未给映射时仅使用传感器单位基底，显示清楚其未校准性质。
-软件测试证明数学转换与约定一致，不代替具体仪器的三轴转动和安装方向验收。
+传感器 Euler 按 `Rz(Z) Ry(Y) Rx(X)` 解释；安装映射 M 给出传感器轴到头部右／前／上的右手基底，先做 `M R_sensor M^T`。
+从物理头部旋转提取 `Rz(yaw) Rx(pitch) Ry(roll)`，再构造输出 Hamilton 四元数：
+**x,y,z,w；`q = q_y(yaw) q_x(pitch) q_z(roll)`**。yaw 正向左，pitch 正向上，roll 正向右倾。
+这是 `posebridge.yxz.v1` 表示；它的四元数轴不是渲染场景轴。回正由宿主负责。
 
 | yaw,pitch,roll | x,y,z,w |
 |---|---|
@@ -62,26 +41,61 @@ Hamilton 四元数顺序 **x,y,z,w**，`q = q_y(yaw) * q_x(pitch) * q_z(roll)`�
 | 179,0,0 | 0,0.999961923,0,0.008726535 |
 | -179,0,0 | 0,-0.999961923,0,0.008726535 |
 
-## OSC 与时效
+## OSC 姿态消息
 
-每个 UDP 数据报一个 OSC 1.0 普通消息，不使用 bundle 或分轴拼接：
+仅回环 UDP，默认 `127.0.0.1:9000`。每数据报一份完整消息，无 bundle。整个数据报最大 **8192 字节**。
+默认目标上限 100 Hz，不改变设备速率；只发新姿态，等待期间合并中间采样。500 ms 无新有效采样停止姿态发送。
 
-- `/posebridge/v1/quaternion`，`,ffff`，x/y/z/w。
-- `/posebridge/v1/euler`，`,fff`，yaw/pitch/roll（度）。
+- `/posebridge/quaternion`：`,ishhhhhhhhihhffff`
+- `/posebridge/euler`：`,ishhhhhhhhihhfff`
 
-默认目标为 `127.0.0.1:9000`，只接受回环地址和非零端口，OSC 默认上限目标 100 Hz。
-端口、格式和上限可配置。网络字节序由 `rosc` 编码，CLI 独立 Python 解码测试核验消息格式。
+| 次序 | 字段 | 类型及语义 |
+|---|---|---|
+| 1 | protocol_version | i，必须为 3 |
+| 2 | source_id | s，1–256 字节 UTF-8，非全空白、无控制字符 |
+| 3 | instance_id | h，每次 start 的随机正标识 |
+| 4 | session_id | h，每次设备连接的随机正标识 |
+| 5 | sequence | h，当前采集会话内完整有效采样序号 |
+| 6 | tx_sequence | h，本实例成功交给 UDP 的姿态包序号，从 1 开始 |
+| 7 | reference_epoch | h，姿态参考代次，正值 |
+| 8 | metadata_revision | h，来源描述版本，正值 |
+| 9 | received_ns | h，源采集会话内主机单调接收纳秒，非负 |
+| 10 | age_at_send_ns | h，PoseBridge 收到此姿态到发送的主机停留时间，非负且小于 500 ms |
+| 11 | sample_time_kind | i，0 缺失；1 设备日历；2 模拟经过时间 |
+| 12 | sample_time_ms | h，指定采样时钟中的非负毫秒 |
+| 13 | sample_clock_epoch | h，有时间时为正值；缺失时为 0 |
+| 14… | pose | f，四元数 XYZW 或 Euler yaw/pitch/roll（度） |
 
-每份姿态带内部会话号、序号和会话内主机单调接收时间。重复轮询不改变序号；相同姿态值的新采样仍增加序号；带时间戳时重复采样时间不保活。
-OSC 消息只在有尚未发送过的有效姿态时发送；输入过快时合并中间帧，输入较慢时不补帧。
-发送由新姿态或待发送截止时间触发，不再每 5 ms 轮询。上限表示发送节奏：小幅调度延迟不累积到每个周期，
-实际相邻包间隔可有抖动；长时间停顿后重新计时，不积攒补发额度。等待期间只保留最新姿态，定时器不保存历史队列。
-500 ms 无有效姿态后标记 stale，停止发送陈旧姿态。重连切换会话，接收端应检查是否需要回正。
+全部 h 使用有符号 int64 范围；kind=0 时 sample_time_ms/epoch 同为 0。
+本地停留时间不包含已发生的 USB/BLE 延迟；Render 的接收时钟另有起点，三类时间不直接相减推导总延迟。
+没有姿态预测、时钟同步或延迟补偿。
 
-当前实际姿态率为当前会话完整姿态数与首末主机接收时间的比值，初始单样本时为 0。
-帧间隔最小／最大值同样是主机观察，不是设备内部采样抖动或运动到音频的总延迟。
-v1 OSC 不携带序号或时间戳，不承诺重排、跨机时钟同步或确认接收端已消费；发送成功只表示交给本机 UDP。
+## 来源描述与状态心跳
 
-OSC v2 用 `--osc-version v2` 显式启用：`/posebridge/v2/quaternion` 为 `,hhhhihffff`，
-`/posebridge/v2/euler` 为 `,hhhhihfff`。源会话、序号、接收时间、采样时间、kind、epoch 在姿态参数之前，
-详见[完整线协议与三种时钟边界](timestamps.md#osc-v2-线协议)。v1 地址和默认行为保留。
+`/posebridge/info`、`/posebridge/status` 均为 `,s`，唯一参数是 UTF-8 JSON。
+共同字段：`schema=3`、`kind=info|status`、`source_id`、`instance_id`、`session_id`、`reference_epoch`、`metadata_revision`、`message_seq`。
+**所有 64 位标识、时间和计数均为十进制字符串**；info/status 的消息序号分别递增。
+连接建立前 session_id 可为 `"0"`，此时不会发送姿态。
+
+info 的 `descriptor` 与 C ABI 完整快照一致：应用配置、平台身份、设备观察、软件能力与参考变化原因。
+status 的 `status` 包含采集状态、分层计数、刷新率、交付直方图和错误信息。嵌套的会话／来源字段必须与共同字段一致。
+设备型号与校准质量无法确认时为 null；软件实现某条命令不代表硬件已验证其效果。
+
+- info 在启动、描述变化时发送，并每 5 秒重复；status 每秒发送，状态变化时在约 20 ms 服务周期内发送。
+- 停止／失败时尽力发送终态后释放发送资源。心跳只描述本次采集实例；独立设备操作通过 CLI/C ABI 返回结果。
+- 接收端对姿态使用 500 ms 时效，包含报文声明的源停留时间；状态心跳独立采用 3 秒时效。
+  heartbeat_alive 表示近期收到状态消息，调用方仍须检查状态是否 stopped/failed。心跳不制造采样、不延长姿态 fresh。
+- 会话、实例、参考和描述版本用于精确关联；迟到的旧元数据不能覆盖更新姿态。无效包不保活。
+- `pose_count`、bytes/frames/delivery 和 OSC 统计针对本次 start；`session_samples` 与实际采样率针对当前设备会话。
+  `coalesced_samples` 统计发送前被较新采样替代的中间样本；没有把它算为 UDP 丢包。
+  接收端单独统计 tx_sequence 缺口，不把设备采样序号跳号视为丢包。
+
+默认 source_id 为 `ble:平台标识`、`usb:端口` 或 `simulate`，仅具有本机作用域；可通过配置固定逻辑名称。
+不同端口或 USB/BLE 不自动合并为同一物理设备。一个逻辑 source_id 同时只应由一个采集实例负责。
+
+## 依据
+
+- [官方新版协议](https://wit-motion.yuque.com/wumwnr/docs/qnpb2lo3f0orduqe)
+- [BWT901BLECL5.0 协议与磁场校准流程](https://wit-motion.yuque.com/wumwnr/docs/gpare3)
+- [BLE SDK](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0)
+- [实测记录](validation.md)

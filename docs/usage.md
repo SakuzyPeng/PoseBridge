@@ -1,165 +1,97 @@
 # PoseBridge 使用指南
 
-读取第三方姿态传感器，通过本机 OSC 转发，或通过实验性 C ABI 嵌入其他程序。
-PoseBridge 不实现自己的惯性融合算法，不代表维特设备厂商，也不负责音频渲染。
-
-首版设备：**维特 BWT901BLECL5.0**。提供 BLE 与 USB 串口输入、Rust CLI、C 动态库、
-硬件无关模拟器和显式设备配置。首批目标为 macOS Apple Silicon、Windows x64。
-
-macOS 与 Windows 的 BLE 角度通知、四元数寄存器读取和 USB 串口已经用实物验证；详细状态见
-[验证记录](validation.md)。MacinRender 已提供原生 OSC 接收接口，GUI 尚未接入；成功发送 OSC 不等于音频软件已消费。
+PoseBridge 0.3 为维特 BWT901BLECL5.0 提供 BLE／USB 采集、安装转换、当前 OSC 协议和实验 C ABI。
+只保留一套当前接口；旧版调用方须同步升级。MacinRender 提供原生接收器，GUI 尚未适配。
 
 ## 构建
 
-使用 Rust 1.96 或更新的兼容稳定版，复用全局 Cargo 缓存和本仓库唯一的 `target/` 目录：
+Rust 1.96 或兼容更新版本，复用全局缓存与唯一 target 目录：
 
 ```sh
 cargo build --workspace --release --locked
 python3 scripts/export_header.py
 ```
 
-| 产物 | macOS | Windows |
-|---|---|---|
-| CLI | `target/release/posebridge` | `target/release/posebridge.exe` |
-| C 动态库 | `target/release/libposebridge_capi.dylib` | `target/release/posebridge_capi.dll` |
-| C 头文件 | `include/posebridge.h` | `include/posebridge.h` |
-| MSVC 导入库 | — | `target/release/posebridge_capi.dll.lib` |
+CLI 为 target/release/posebridge（Windows 加 .exe）。动态库为 libposebridge_capi.dylib／posebridge_capi.dll，
+头文件 include/posebridge.h；Windows 导入库 posebridge_capi.dll.lib。开发与 Release 均关闭增量编译和调试信息。
+macOS 动态库使用 @rpath install name。Windows 原生验证在 MSVC 开发者环境执行。
 
-开发、测试和 Release 配置均关闭增量编译及调试信息。macOS 发行库不额外执行符号剥离：
-当前工具链的 strip 曾使 Mach-O 字符串表不满足 Apple linker 的对齐要求。
-动态库 install name 使用 `@rpath/libposebridge_capi.dylib`，宿主需设置其库搜索路径。
-原生库使用独立的 `posebridge_capi` 文件名，避免 Windows 下与 `posebridge.exe` 的 PDB 文件冲突；C 函数仍使用 `pb_` 前缀。
-
-## 先确认能读取数据
-
-BLE 由程序内扫描和连接，不要求先在系统蓝牙面板配对。保持设备开机，并断开可能占用它的手机 App。
-macOS 首次运行需允许宿主终端使用蓝牙；CLI 嵌入蓝牙用途说明。C ABI 宿主自行负责权限与应用声明。
+## 枚举与读取
 
 ```sh
-./target/release/posebridge scan --transport ble --timeout-seconds 6
-./target/release/posebridge diagnose --transport ble --device "扫描得到的设备标识" --duration 10
+posebridge scan --transport usb --json
+posebridge scan --transport ble --timeout-seconds 5 --json
+posebridge diagnose --transport usb --port /dev/cu.usbserial-210 --duration 10 --json
+posebridge diagnose --transport ble --device "扫描返回的标识" --duration 10 --json
 ```
 
-设备广播通常以 `WT` 开头，例如 `WT901BLE68`。Mac 的设备标识是不透明 UUID，不能用名称或蓝牙 MAC 地址代替。
-`scan` 仅枚举；`diagnose` 默认读取连续角度通知，不发送校准、速率设置或保存命令。
+BLE 由程序连接，无需先在系统蓝牙面板常规配对。macOS 须允许宿主使用蓝牙；嵌入 C ABI 的宿主自行提供权限声明。
+Mac 使用不透明平台 UUID，Windows 可显示蓝牙地址；广播名称不能代替标识。
+USB 115200、8N1、无流控，使用扫描得到的端口，不把示例路径当作固定端口。
 
-USB 接线后运行：
+JSON 是统一的 schema=3 快照：descriptor、status、pose、operation。所有 64 位标识/时间/计数都是十进制字符串。
+未提供诊断安装映射时使用传感器单位基底，并显示未验收提示。普通读取不更改设备设置。
+
+## 设备检查与控制
 
 ```sh
-./target/release/posebridge scan --transport usb
-./target/release/posebridge diagnose --transport usb --port /dev/cu.usbserial-110 --duration 10
+posebridge inspect --transport usb --port /dev/cu.usbserial-210 --json
+posebridge configure --transport usb --port /dev/cu.usbserial-210 --json rate --hz 100
+posebridge configure --transport usb --port /dev/cu.usbserial-210 output --format timestamp-gyro-quaternion
+posebridge configure --transport usb --port /dev/cu.usbserial-210 algorithm --mode six-axis
 ```
 
-端口路径以枚举结果为准，Windows 使用 `--port COM3` 等实际端口名。默认 115200、8N1、无流控。
-枚举仅显示被系统识别为 USB 的串口；驱动没有提供 USB 元数据时，可以显式指定已知端口。
-此型号 USB 实测使用与 BLE 相同的协议（默认帧为 **20 字节**，已支持带时间戳的可变长度格式），不使用其他 WIT 型号的 11 字节帧。
+inspect 只读 CALSW、回传率、输出格式、带宽、设备安装方向、算法与版本。实际读取只在停止采集时进行。
+C ABI 快照查询可在采集期间返回观察时间与有效性明确的缓存，不产生后台寄存器轮询。
+软件支持命令、设备回读值、应用安装映射与校准质量分别报告；未确认项为 null。
 
-诊断输出含原始 XYZ 角度、转换后 yaw/pitch/roll、实际姿态率及连接状态。
-未指定安装映射时，诊断使用传感器 XYZ 的单位基底并明确提示；这不是已校准的头部朝向。
-`--json` 输出 NDJSON，便于保存和脚本分析。`--duration 0` 持续运行至 Ctrl+C。
-
-`status.delivery` 统计解析前的读取／通知边界：次数、最大字节数、每次最多完整帧数，以及通知间隔直方图。
-直方图依次为 `<1`、`1–<10`、`10–<30`、`30–<100`、`>=100 ms`。一份 BLE 通知可能含多份姿态；
-姿态帧率高不代表通知以同样频率均匀到达。这里测到的是主机交付时间，不能区分空口与系统栈内部延迟。
-
-Windows 11 或更新系统可显式尝试临时高吞吐连接偏好（experimental）：
-
-```sh
-posebridge diagnose --transport ble --device "设备标识" --ble-mode throughput --duration 15 --json
-```
-
-默认 `--ble-mode default` 保留系统连接策略；macOS 不支持该选项的 throughput 值。
-Windows 的 `status.ble_link` 显示请求状态、系统报告的连接间隔和外围设备延迟；请求成功不保证达到目标姿态率。
-该偏好可能减少可同时连接的其他 BLE 设备数量，停止、断开或异常退出释放句柄后不再持有请求。
-它不修改传感器回传率或 Flash。默认模式在系统不支持查询连接参数时仍可采集，并在 `note` 中说明。
-
-可选的设备四元数读取：
-
-```sh
-./target/release/posebridge diagnose --transport ble --device "设备标识" --pose-input quaternion --duration 10 --json
-```
-
-此模式发送只读寄存器请求，每次最多一个未完成请求，最高请求节奏为 50 Hz；实际返回率单独统计。
-它不是 200 Hz 推送，不会把旧四元数随新角度包重发来提高计数。
-
-## OSC 桥接
-
-桥接要求显式安装映射：三个有符号轴依次表示**头部右、前、上方向对应的传感器轴**，
-必须构成右手基底。`-y,+x,+z` 表示右为传感器 -Y、前为 +X、上为 +Z；适用于标签朝上、X 朝前的候选安装。
-该模板的实际设备轴向和佩戴结果仍需按三轴动作确认。
-
-```sh
-./target/release/posebridge bridge --transport ble --device "设备标识" --mount=-y,+x,+z
-./target/release/posebridge bridge --transport usb --port /dev/cu.usbserial-110 --mount=-y,+x,+z
-```
-
-默认目标 `127.0.0.1:9000`，四元数输出，100 Hz 为 **OSC 发送上限目标**，不修改设备回传率。
-可使用 `--osc-target 127.0.0.1:9001 --osc-rate-hz 50 --format euler`。
-输入不足 100 Hz 时维持真实新采样速率；500 ms 无有效姿态后标为 stale，停止发送陈旧姿态。
-断开后按 1、2、4、8 秒等待重连原设备；权限或协议错误停止重试。Ctrl+C 释放连接。
-
-| OSC 地址 | 参数 |
+| configure 子命令 | 行为／保存边界 |
 |---|---|
-| `/posebridge/v1/quaternion` | `,ffff`：x、y、z、w |
-| `/posebridge/v1/euler` | `,fff`：yaw、pitch、roll，单位度 |
+| rate --hz N | 支持 1/2/5/10/20/50/100/200；回读核验，不保存 |
+| output --format NAME | motion、timestamp-euler、timestamp-quaternion、timestamp-gyro-quaternion；检查新协议特征，回读，不保存 |
+| algorithm --mode six-axis/nine-axis | 明确切换算法，回读，不保存 |
+| zero-yaw | 当前须为六轴；不隐式切模式，不保存；发送与实际归零效果分开报告 |
+| accel-calibrate | 观察 CALSW 启动／完成；没观察到启动则 unverified，不自动重发或保存 |
+| mag-start / mag-stop | 明确开始／结束磁场校准，回读；精度未据此验收，不自动保存 |
+| angle-reference | 设置设备角度参考并按官方流程发送 SAVE，效果与掉电持久化需独立验证 |
+| reset-defaults | 恢复默认并保存；回读已知默认速率、输出、算法，不声称验证全部校准系数或掉电持久化 |
+| save | 显式保存当前设置，不能用 SAVE 寄存器自清零证明掉电持久化 |
 
-仅支持本机回环目标。回正和用户侧平滑交给接收软件，PoseBridge 不重复施加。
-这些消息是明确的 PoseBridge 姿态约定，不是任何支持 OSC 的软件都能直接识别；详见[协议与坐标](protocol.md)。
+设备操作必须在采集停止后执行，忙时返回 Busy；完成后由调用方显式重新启动。跨进程 CLI 也须先停止占用设备的 bridge。
+指令解锁后等待 200 ms；适用的设置写入后再等待 100 ms。读回在 3 秒预算内每 250 ms 重试只读请求，
+允许过渡旧回复，但不会重写设置。超时不证明写入没发生。
+校准、算法、参考或安装映射变化，以及写入后结果不确定时，更新参考代次／原因。回正由下游处理。
+只读查询和一般测试不会自动调用校准、参考保存或恢复默认。
 
-新姿态到达即触发发送；限速等待期间只保留最新姿态，使用截止时间唤醒。没有新采样时不重复发送，也不补发积压历史帧。
-Windows 在模拟或 OSC 目标超过 50 Hz，以及读取原生四元数时，临时申请 1 ms 系统定时精度，
-避免默认约 15.6 ms 定时粒度限制发送。请求只在采集任务存活时持有，停止、失败或取消均释放；高频运行可能增加耗电。
-用独立本机接收器测量 Release 输入与实际 OSC 速率：
-
-```sh
-python3 scripts/measure_osc.py -- simulate --sample-rate-hz 200 --osc-rate-hz 200 --duration 15
-python3 scripts/measure_osc.py -- bridge --transport usb --port /dev/cu.usbserial-110 --mount=-y,+x,+z --osc-rate-hz 200 --duration 15
-```
-
-测量脚本验证地址、类型、有限数值和四元数范数，丢弃开始 3 秒，报告接收间隔分位数；不会改变设备速率。
-高频输出四元数默认由连续角度流本地转换得到，不要求选择原生四元数寄存器输入。
-
-## 设备时间戳与原生四元数
-
-使用 `configure ... output --format timestamp-quaternion` 显式启用时间戳＋原生四元数，随后
-`bridge ... --pose-input stream-quaternion --osc-version v2` 转发。普通桥接不修改该配置。
-可选 `timestamp-euler` 和 `timestamp-gyro-quaternion`，操作与恢复示例见[时间戳指南](timestamps.md)。
-设备日历、源主机接收时间和接收器时间分别上报，不自动同步或作延迟补偿。
-旧 `--pose-input quaternion` 是寄存器轮询；高频原生通知用 `stream-quaternion`。
-
-## 无设备模拟
+## OSC 与安装
 
 ```sh
-./target/release/posebridge simulate --yaw 30 --pitch 20 --roll 10 --duration 3
-./target/release/posebridge simulate --pattern wrap --format euler --duration 3
+posebridge bridge --source-id headset --transport usb --port /dev/cu.usbserial-210 --mount=-y,+x,+z
+posebridge bridge --source-id headset --transport ble --device "平台标识" --mount=-y,+x,+z \
+  --pose-input stream-quaternion --osc-rate-hz 100
 ```
 
-轨迹支持 `fixed`、`yaw`、`combined`、`wrap`，`--sample-rate-hz` 控制模拟新采样率。
-模拟器的坐标已是输出姿态约定，不再应用设备安装映射。
-加 `--osc-version v2 --sample-clock` 可测试 kind=2 的合成经过时间；默认不生成采样时间。
+--mount 三个轴依次对应头部右、前、上，要求右手基底。示例映射需要佩戴后的三轴动作确认。
+原生四元数通知使用 stream-quaternion，需先明确配置相应输出；quaternion 是最高请求节奏 50 Hz 的独立寄存器读取。
+默认 OSC 目标 127.0.0.1:9000、四元数、上限目标 100 Hz。另有 --format euler、--osc-target 和 --osc-rate-hz。
+姿态、info、status 的定义见[协议](protocol.md)。默认来源名仅在本机有效；多个逻辑来源使用不同 --source-id。
 
-## 显式设备配置
+心跳和姿态独立；500 ms 无有效采样停止姿态发送。source age 字段是源主机停留时间，不是总延迟。
+断线后以 1、2、4、8 秒重连原标识，成功产生新会话／参考代次；权限和协议错误终止。
+Ctrl+C 正常清理连接，并尽力发终态。停止后保留最后姿态，fresh=false。
 
-普通采集不修改设备配置。以下命令会写设备寄存器，并读取返回值检查；没有隐式保存至 Flash：
+Windows 可选 --ble-mode throughput（Windows 11+），只在连接期间申请系统偏好；macOS 拒绝该值。
+Windows 高频模拟／OSC 期间申请 1 ms 定时精度，退出释放；这不能保证 USB/BLE 交付率。
 
 ```sh
-./target/release/posebridge configure --transport ble --device "设备标识" rate --hz 100
-./target/release/posebridge configure --transport usb --port /dev/cu.usbserial-110 rate --hz 50
+posebridge simulate --source-id demo --pattern combined --sample-clock --duration 3
+python3 scripts/measure_osc.py -- simulate --sample-rate-hz 200 --osc-rate-hz 200 --duration 10
 ```
 
-支持 1、2、5、10、20、50、100、200 Hz；125 Hz 属于其他型号的配置，不接受。
-寄存器回读匹配只证明配置值匹配，实际通知率仍须用 `diagnose` 测量。
+模拟支持 fixed/yaw/combined/wrap，synthetic 时间明确标为 kind=2。测量脚本只统计姿态包，独立忽略合法状态心跳，
+区分源采样率与实际 OSC 率，不把合并采样算成网络丢包。
 
-同一入口还提供 `accel-calibrate`、`mag-start`、`mag-stop`、`save`。
-加速度校准按厂商要求静置；磁场校准由用户按厂商说明执行转动，再显式结束。
-加速度校准需观察到 CALSW 开始与完成，否则报告未验证；保存命令不会将寄存器回读冒充掉电持久化验证。
-固件升级不在本工具范围内。
-
-## 库与开发检查
-
-Rust 使用 `posebridge_core::Controller`，CLI 和 C ABI 共用它的配置、采集和生命周期实现。
-C ABI 以不透明 `PbContext` 和最新快照轮询工作，详见 [C ABI 文档](c-api.md)及
-[真实 C 调用测试](../tests/c_api_smoke.c)。
+## 检查
 
 ```sh
 cargo fmt --all --check
@@ -169,19 +101,6 @@ python3 tests/osc_cli_smoke.py
 python3 scripts/check_c_api.py
 ```
 
-macOS C ABI 检查：
-
-```sh
-cc -std=c11 -Iinclude tests/c_api_smoke.c -Ltarget/release -lposebridge_capi \
-  -Wl,-rpath,"$PWD/target/release" -o target/release/c_api_smoke
-target/release/c_api_smoke
-```
-
-Windows 在 MSVC 开发者命令提示符中构建 Rust 项目、导出头文件后执行：
-
-```bat
-cl /nologo /W4 /Iinclude tests\c_api_smoke.c /Fetarget\release\c_api_smoke.exe /Fotarget\release\c_api_smoke.obj /link target\release\posebridge_capi.dll.lib
-target\release\c_api_smoke.exe
-```
-
-macOS／Windows 原生 CI 和本机验证记录见[验证记录](validation.md)。
+tests/hardware_smoke.py 默认只读检查与采集；显式 --exercise-config 才临时切换可恢复配置并在 finally 恢复。
+--expect-reconnect 用于用户配合的物理拔插，不能与配置切换同时使用。脚本不会校准、归零、SAVE 或恢复默认。
+详细状态见[验证记录](validation.md)，嵌入规则见 [C ABI](c-api.md)。

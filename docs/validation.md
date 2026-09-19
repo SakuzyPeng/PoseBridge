@@ -1,4 +1,9 @@
-# 验证记录
+# 当前验证入口
+
+PoseBridge 0.3／当前协议 3 的功能与控制验证见 [0.3 验证记录](measurements/2026-09-19-downstream.md)。
+以下内容保留为 0.1/0.2 历史通信记录，不表示旧协议仍可使用；当前命令与字段以 [usage](usage.md)、[protocol](protocol.md)、[C ABI](c-api.md) 为准。
+
+# 历史验证记录
 
 日期：2026-09-19。环境：MacBook Pro M4 Pro、48 GB 内存、macOS 27.0、Rust 1.96.0。
 此表区分软件契约、实物通信和尚未验证的定位 / 性能；不以单个平台通过代替其他平台。

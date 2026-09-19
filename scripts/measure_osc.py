@@ -25,22 +25,23 @@ def decode(data):
 
     address, offset = string(0)
     tags, offset = string(offset)
-    expected = {
-        "/posebridge/v1/quaternion": ",ffff",
-        "/posebridge/v1/euler": ",fff",
-        "/posebridge/v2/quaternion": ",hhhhihffff",
-        "/posebridge/v2/euler": ",hhhhihfff",
-    }
-    if address not in expected or tags != expected[address]:
-        raise ValueError("unexpected OSC address/types")
-    values = struct.unpack(">" + tags[1:].replace("h", "q"), data[offset:])
-    if address.startswith("/posebridge/v2/"):
-        session, sequence, received, sample, kind, epoch = values[:6]
-        if session <= 0 or sequence <= 0 or min(received, sample, epoch) < 0 or kind not in (0, 1, 2):
-            raise ValueError("invalid source timing metadata")
-        if (kind == 0 and (sample != 0 or epoch != 0)) or (kind != 0 and epoch == 0):
-            raise ValueError("inconsistent sample clock")
-        values = values[6:]
+    if address in ("/posebridge/info", "/posebridge/status"):
+        if tags != ",s": raise ValueError("invalid telemetry tags")
+        body, end = string(offset)
+        if end != len(data) or json.loads(body)["schema"] != 3: raise ValueError("invalid telemetry")
+        return None
+    expected = {"/posebridge/quaternion": ",ishhhhhhhhihhffff", "/posebridge/euler": ",ishhhhhhhhihhfff"}
+    if address not in expected or tags != expected[address]: raise ValueError("unexpected OSC address/types")
+    version = struct.unpack_from(">i", data, offset)[0]; offset += 4
+    source_id, offset = string(offset)
+    fields = struct.unpack_from(">qqqqqqqqiqq", data, offset); offset += struct.calcsize(">qqqqqqqqiqq")
+    instance, session, sequence, tx, reference, revision, received, age, kind, sample, epoch = fields
+    if version != 3 or not source_id or min(instance, session, sequence, tx, reference, revision) <= 0:
+        raise ValueError("invalid protocol/identity")
+    if min(received, age, sample, epoch) < 0 or age >= 500000000 or kind not in (0,1,2): raise ValueError("invalid timing")
+    if (kind == 0 and (sample or epoch)) or (kind != 0 and not epoch): raise ValueError("invalid sample clock")
+    count = 4 if address.endswith("quaternion") else 3
+    values = struct.unpack(">"+"f"*count, data[offset:])
     if not all(math.isfinite(value) for value in values):
         raise ValueError("non-finite pose")
     if len(values) == 4 and abs(sum(value * value for value in values) - 1) > 1e-5:
@@ -61,13 +62,13 @@ def measure(exe, arguments, warmup, timeout):
         def receive():
             while not stopped.is_set():
                 try:
-                    data = sock.recv(512)
+                    data = sock.recv(8193)
                 except socket.timeout:
                     continue
                 now = time.perf_counter()
                 try:
-                    decode(data)
-                    packets.append(now)
+                    if decode(data) is not None:
+                        packets.append(now)
                 except (ValueError, UnicodeError, struct.error) as error:
                     errors.append(str(error))
 
@@ -92,11 +93,11 @@ def measure(exe, arguments, warmup, timeout):
     if poses:
         session = poses[-1]["pose"]["session_id"]
         same_session = [row for row in poses if row["pose"]["session_id"] == session]
-        first = same_session[0]["pose"]["received_ns"]
-        settled = [row["pose"] for row in same_session if row["pose"]["received_ns"] - first >= warmup * 1e9]
-        if len(settled) >= 2 and settled[-1]["received_ns"] > settled[0]["received_ns"]:
-            span = (settled[-1]["received_ns"] - settled[0]["received_ns"]) / 1e9
-            result["input_hz"] = (settled[-1]["sequence"] - settled[0]["sequence"]) / span
+        first = int(same_session[0]["pose"]["received_ns"])
+        settled = [row["pose"] for row in same_session if int(row["pose"]["received_ns"]) - first >= warmup * 1e9]
+        if len(settled) >= 2 and int(settled[-1]["received_ns"]) > int(settled[0]["received_ns"]):
+            span = (int(settled[-1]["received_ns"]) - int(settled[0]["received_ns"])) / 1e9
+            result["input_hz"] = (int(settled[-1]["sequence"]) - int(settled[0]["sequence"])) / span
     if packets:
         stable = [stamp for stamp in packets if stamp >= packets[0] + warmup]
         if len(stable) >= 2:

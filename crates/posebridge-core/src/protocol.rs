@@ -199,6 +199,10 @@ pub fn command_register(command: &DeviceCommand) -> Result<(u8, u16)> {
         DeviceCommand::MagStart => (0x01, 0x07),
         DeviceCommand::MagStop => (0x01, 0x00),
         DeviceCommand::Save => (0x00, 0x00),
+        DeviceCommand::Algorithm { mode } => (0x24, *mode as u16),
+        DeviceCommand::ZeroYaw => (0x01, 0x04),
+        DeviceCommand::AngleReference => (0x01, 0x08),
+        DeviceCommand::ResetDefaults => (0x00, 0x01),
     })
 }
 

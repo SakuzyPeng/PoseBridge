@@ -150,8 +150,11 @@ fn real_ble_a4_capture_has_correct_time_and_component_order() {
 }
 
 #[test]
-fn osc_v2_keeps_int64_precision_and_distinguishes_absent_time() {
+fn osc_keeps_int64_precision_and_distinguishes_absent_time() {
     let mut pose = PoseSnapshot {
+        instance_id: 1,
+        reference_epoch: 1,
+        metadata_revision: 1,
         session_id: 0x123456789abcdef,
         sequence: (1 << 53) + 1,
         received_ns: (1 << 54) + 3,
@@ -166,35 +169,31 @@ fn osc_v2_keeps_int64_precision_and_distinguishes_absent_time() {
         fresh: true,
     };
     for format in [OscFormat::Euler, OscFormat::Quaternion] {
-        let bytes = osc::encode_versioned(&pose, format, OscVersion::V2).unwrap();
+        let bytes = osc::encode(&pose, format, "test", 1, 0).unwrap();
         let (_, rosc::OscPacket::Message(msg)) = rosc::decoder::decode_udp(&bytes).unwrap() else {
             panic!("message")
         };
-        assert_eq!(
-            msg.args[..6],
-            [
-                rosc::OscType::Long(pose.session_id as i64),
-                rosc::OscType::Long(pose.sequence as i64),
-                rosc::OscType::Long(pose.received_ns as i64),
-                rosc::OscType::Long(473398726930),
-                rosc::OscType::Int(1),
-                rosc::OscType::Long(2),
-            ]
-        );
+        assert_eq!(msg.args[0], rosc::OscType::Int(3));
+        assert_eq!(msg.args[1], rosc::OscType::String("test".into()));
+        assert_eq!(msg.args[3], rosc::OscType::Long(pose.session_id as i64));
+        assert_eq!(msg.args[4], rosc::OscType::Long(pose.sequence as i64));
+        assert_eq!(msg.args[8], rosc::OscType::Long(pose.received_ns as i64));
+        assert_eq!(msg.args[11], rosc::OscType::Long(473398726930));
     }
+
     pose.sample_time = None;
-    let bytes = osc::encode_versioned(&pose, OscFormat::Euler, OscVersion::V2).unwrap();
+    let bytes = osc::encode(&pose, OscFormat::Euler, "test", 1, 0).unwrap();
     let (_, rosc::OscPacket::Message(msg)) = rosc::decoder::decode_udp(&bytes).unwrap() else {
         panic!("message")
     };
     assert_eq!(
-        msg.args[3..6],
+        msg.args[10..13],
         [
-            rosc::OscType::Long(0),
             rosc::OscType::Int(0),
+            rosc::OscType::Long(0),
             rosc::OscType::Long(0)
         ]
     );
     pose.session_id = u64::MAX;
-    assert!(osc::encode_versioned(&pose, OscFormat::Euler, OscVersion::V2).is_err());
+    assert!(osc::encode(&pose, OscFormat::Euler, "test", 1, 0).is_err());
 }

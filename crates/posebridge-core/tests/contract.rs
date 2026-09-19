@@ -192,7 +192,6 @@ fn osc_loopback_types_values_and_rate_limit() {
             target: socket.local_addr().unwrap(),
             max_rate_hz: 50,
             format: OscFormat::Euler,
-            version: OscVersion::V1,
         }),
         ..Config::default()
     })
@@ -200,16 +199,19 @@ fn osc_loopback_types_values_and_rate_limit() {
     c.start().unwrap();
     let start = Instant::now();
     let mut count = 0;
-    let mut data = [0u8; 512];
+    let mut data = [0u8; 8192];
     while start.elapsed() < Duration::from_millis(800) {
         let n = socket.recv(&mut data).unwrap();
         let (rest, packet) = rosc::decoder::decode_udp(&data[..n]).unwrap();
         assert!(rest.is_empty());
         match packet {
             rosc::OscPacket::Message(m) => {
-                assert_eq!(m.addr, "/posebridge/v1/euler");
+                if m.addr != "/posebridge/euler" {
+                    continue;
+                }
+                assert_eq!(m.addr, "/posebridge/euler");
                 assert_eq!(
-                    m.args,
+                    m.args[13..],
                     vec![
                         rosc::OscType::Float(30.),
                         rosc::OscType::Float(20.),
@@ -244,16 +246,27 @@ fn no_duplicate_or_stale_osc_pose() {
             target: socket.local_addr().unwrap(),
             max_rate_hz: 100,
             format: OscFormat::Quaternion,
-            version: OscVersion::V1,
         }),
         ..Config::default()
     })
     .unwrap();
     c.start().unwrap();
-    let mut data = [0u8; 512];
+    let mut data = [0u8; 8192];
     let _ = socket.recv(&mut data).unwrap();
     std::thread::sleep(Duration::from_millis(550));
-    assert!(socket.recv(&mut data).is_err());
+    socket.set_nonblocking(true).unwrap();
+    let mut pose_packets = 0;
+    while let Ok(n) = socket.recv(&mut data) {
+        let (_, rosc::OscPacket::Message(message)) = rosc::decoder::decode_udp(&data[..n]).unwrap()
+        else {
+            panic!("message")
+        };
+        if message.addr == "/posebridge/quaternion" {
+            pose_packets += 1;
+        }
+    }
+    // The first recv may have consumed the initial info/status datagram.
+    assert!(pose_packets <= 1);
     c.stop().unwrap();
 }
 
@@ -265,21 +278,22 @@ fn configuration_validation_preserves_previous_config() {
             target: "192.0.2.1:9000".parse().unwrap(),
             max_rate_hz: 100,
             format: OscFormat::Quaternion,
-            version: OscVersion::V1,
         }),
         ..Config::default()
     };
     assert!(c.set_config(config).is_err());
     assert!(c.config().osc.is_none());
+    c.set_config(Config {
+        source: Source::Usb {
+            port: "fake".into(),
+            baud: 115200,
+        },
+        ..Config::default()
+    })
+    .unwrap();
     assert!(
-        c.set_config(Config {
-            source: Source::Usb {
-                port: "fake".into(),
-                baud: 115200
-            },
-            ..Config::default()
-        })
-        .is_err()
+        c.start().is_err(),
+        "hardware acquisition still requires mounting; inspect does not"
     );
 }
 
