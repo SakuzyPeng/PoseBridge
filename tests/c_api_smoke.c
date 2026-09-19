@@ -25,8 +25,8 @@ int main(void) {
     assert(pb_context_create(&ctx) == PB_OK && ctx != NULL);
     PbPose p = {0}; p.struct_size = sizeof(p);
     assert(pb_latest_pose(ctx, &p) == PB_NO_DATA);
-    PbPose small = {0}; small.struct_size = 4;
-    assert(pb_latest_pose(ctx, &small) == PB_BUFFER_TOO_SMALL);
+    PbPose undersized_pose = {0}; undersized_pose.struct_size = 4;
+    assert(pb_latest_pose(ctx, &undersized_pose) == PB_BUFFER_TOO_SMALL);
     char error[512]; uint32_t required = 0;
     assert(pb_error_copy(ctx, NULL, 0, &required) == PB_BUFFER_TOO_SMALL);
     assert(required > 1);
