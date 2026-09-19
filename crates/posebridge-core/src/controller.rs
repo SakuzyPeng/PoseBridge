@@ -297,7 +297,7 @@ fn emit(shared: &SharedRef, sender: &mut Option<Sender>) -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_output(deadline: Option<Instant>) {
+async fn wait_for_deadline(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
         None => std::future::pending::<()>().await,
@@ -305,6 +305,8 @@ async fn wait_for_output(deadline: Option<Instant>) {
 }
 
 async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool>) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let _timer_resolution = crate::timing::TimerResolution::for_config(&config)?;
     let mut sender = config.osc.clone().map(Sender::new).transpose()?;
     if let Source::Simulate {
         pattern,
@@ -334,7 +336,7 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
                     publish(&shared,pose::from_euler(angles)?,&RawData::default(),start)?;
                     emit(&shared,&mut sender)?;
                 },
-                _ = wait_for_output(output_deadline) => emit(&shared,&mut sender)?,
+                _ = wait_for_deadline(output_deadline) => emit(&shared,&mut sender)?,
             }
         }
     }
@@ -400,12 +402,14 @@ async fn pump(
         .ok_or_else(|| Error::Invalid("mounting required".into()))?;
     let mut next_request = start;
     let mut outstanding: Option<Instant> = None;
-    // This timer only services health checks and optional register requests.
-    // OSC is driven by incoming poses and its own pending-send deadline.
+    // This timer only services health checks. OSC and optional quaternion reads
+    // each use their own deadline, so maintenance cannot quantize their cadence.
     let mut ticks = tokio::time::interval(Duration::from_millis(20));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let output_deadline = sender.as_ref().and_then(Sender::deadline);
+        let request_deadline = (config.pose_input == PoseInput::Quaternion)
+            .then(|| outstanding.map_or(next_request, |sent| sent + Duration::from_millis(250)));
         tokio::select! {
             _ = cancel.changed() => return Err(Error::Cancelled),
             bytes = connection.read() => {
@@ -454,7 +458,13 @@ async fn pump(
                 lock(shared).status.discarded_bytes=parser.discarded_bytes;
                 emit(shared,sender)?;
             },
-            _ = wait_for_output(output_deadline) => emit(shared,sender)?,
+            _ = wait_for_deadline(output_deadline) => emit(shared,sender)?,
+            _ = wait_for_deadline(request_deadline) => {
+                transport::cancel_after(cancel,Duration::from_secs(2),connection.write(&protocol::read_register(0x51))).await?;
+                let sent = Instant::now();
+                outstanding=Some(sent);
+                next_request=sent+Duration::from_millis(20);
+            },
             _ = ticks.tick() => {
                 let now = Instant::now();
                 if now >= next_link_check {
@@ -471,11 +481,6 @@ async fn pump(
                 if now.duration_since(last_bytes)>Duration::from_secs(10) { return Err(Error::Timeout("no device bytes for 10 seconds".into())); }
                 if start.elapsed()>Duration::from_secs(10) && lock(shared).status.frames_received==0 {
                     return Err(Error::Protocol("no WIT 20-byte frames; check model, firmware and baud rate".into()));
-                }
-                if config.pose_input==PoseInput::Quaternion && now>=next_request
-                    && outstanding.is_none_or(|t|now.duration_since(t)>=Duration::from_millis(250)) {
-                    transport::cancel_after(cancel,Duration::from_secs(2),connection.write(&protocol::read_register(0x51))).await?;
-                    outstanding=Some(now);next_request=now+Duration::from_millis(20);
                 }
             },
         }
@@ -577,6 +582,64 @@ mod tests {
     use std::net::UdpSocket;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_serial::SerialStream;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quaternion_reads_wait_for_response_retry_timeout_and_cancel() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let config = Config {
+            source: Source::Usb {
+                port: "test-pty".into(),
+                baud: 115200,
+            },
+            pose_input: PoseInput::Quaternion,
+            mounting: Some(Mounting::parse("+x,+y,+z").unwrap()),
+            ..Config::default()
+        };
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let observed = shared.clone();
+        let (tx, mut cancel) = watch::channel(false);
+        let handle = tokio::spawn(async move {
+            pump(&config, &shared, &mut connection, &mut None, &mut cancel).await
+        });
+        let mut command = [0u8; 5];
+        tokio::time::timeout(Duration::from_secs(1), device.read_exact(&mut command))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(command, protocol::read_register(0x51));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), device.read_exact(&mut command))
+                .await
+                .is_err(),
+            "more than one request in flight"
+        );
+        // Withhold the first response: retry must use its timeout, not a fast poll loop.
+        tokio::time::timeout(Duration::from_millis(500), device.read_exact(&mut command))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(command, protocol::read_register(0x51));
+        let mut response = [0u8; 20];
+        response[..4].copy_from_slice(&[0x55, 0x71, 0x51, 0]);
+        response[4..6].copy_from_slice(&32767i16.to_le_bytes());
+        device.write_all(&response).await.unwrap();
+        tokio::time::timeout(Duration::from_millis(200), device.read_exact(&mut command))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lock(&observed).status.pose_count, 1);
+        assert!(fresh(&lock(&observed), Instant::now()));
+        tx.send(true).unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(200), handle)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(Error::Cancelled)
+        ));
+    }
 
     // macOS PTYs do not implement IOSSIOSPEED. Use the library's PTY constructor instead
     // of weakening real-port configuration error handling to make a fake port open.

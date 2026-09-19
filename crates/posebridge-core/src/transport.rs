@@ -260,7 +260,9 @@ impl Connection {
         match self {
             Self::Usb(stream) => {
                 stream.write_all(bytes).await?;
-                stream.flush().await?;
+                // SerialStream::flush may call blocking tcdrain/FlushFileBuffers even
+                // inside poll_flush. Queue the ordered bytes without blocking the
+                // runtime; register responses provide the protocol acknowledgement.
                 Ok(())
             }
             Self::Ble {

@@ -6,6 +6,8 @@ mod model;
 pub mod osc;
 pub mod pose;
 pub mod protocol;
+#[cfg(target_os = "windows")]
+mod timing;
 mod transport;
 
 pub use controller::Controller;

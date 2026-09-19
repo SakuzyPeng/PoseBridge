@@ -19,4 +19,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61.3", features = ["Devices_Bluetooth", "Foundation"] }
+windows = { version = "0.61.3", features = ["Devices_Bluetooth", "Foundation", "Win32_Media"] }
