@@ -13,7 +13,7 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 - Rust 核心库、CLI、实验性 C ABI。
 
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
-macOS BLE／USB 已通过实机读取验证，其他平台与功能的验收状态见[验证记录](docs/validation.md)。
+macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。
 
 ## 快速开始
 

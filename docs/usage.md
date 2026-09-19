@@ -6,7 +6,7 @@ PoseBridge 不实现自己的惯性融合算法，不代表维特设备厂商，
 首版设备：**维特 BWT901BLECL5.0**。提供 BLE 与 USB 串口输入、Rust CLI、C 动态库、
 硬件无关模拟器和显式设备配置。首批目标为 macOS Apple Silicon、Windows x64。
 
-macOS 的 BLE 角度通知、四元数寄存器读取和 USB 串口已经用实物验证；Windows 编译及真机状态见
+macOS 与 Windows 的 BLE 角度通知、四元数寄存器读取和 USB 串口已经用实物验证；详细状态见
 [验证记录](validation.md)。MacinRender OSC 接收端尚需单独实现；成功发送 OSC 不等于音频软件已消费。
 
 ## 构建
@@ -21,13 +21,14 @@ python3 scripts/export_header.py
 | 产物 | macOS | Windows |
 |---|---|---|
 | CLI | `target/release/posebridge` | `target/release/posebridge.exe` |
-| C 动态库 | `target/release/libposebridge.dylib` | `target/release/posebridge.dll` |
+| C 动态库 | `target/release/libposebridge_capi.dylib` | `target/release/posebridge_capi.dll` |
 | C 头文件 | `include/posebridge.h` | `include/posebridge.h` |
-| MSVC 导入库 | — | `target/release/posebridge.dll.lib` |
+| MSVC 导入库 | — | `target/release/posebridge_capi.dll.lib` |
 
 开发、测试和 Release 配置均关闭增量编译及调试信息。macOS 发行库不额外执行符号剥离：
 当前工具链的 strip 曾使 Mach-O 字符串表不满足 Apple linker 的对齐要求。
-动态库 install name 使用 `@rpath/libposebridge.dylib`，宿主需设置其库搜索路径。
+动态库 install name 使用 `@rpath/libposebridge_capi.dylib`，宿主需设置其库搜索路径。
+原生库使用独立的 `posebridge_capi` 文件名，避免 Windows 下与 `posebridge.exe` 的 PDB 文件冲突；C 函数仍使用 `pb_` 前缀。
 
 ## 先确认能读取数据
 
@@ -134,7 +135,7 @@ python3 scripts/check_c_api.py
 macOS C ABI 检查：
 
 ```sh
-cc -std=c11 -Iinclude tests/c_api_smoke.c -Ltarget/release -lposebridge \
+cc -std=c11 -Iinclude tests/c_api_smoke.c -Ltarget/release -lposebridge_capi \
   -Wl,-rpath,"$PWD/target/release" -o target/release/c_api_smoke
 target/release/c_api_smoke
 ```
@@ -142,8 +143,8 @@ target/release/c_api_smoke
 Windows 在 MSVC 开发者命令提示符中构建 Rust 项目、导出头文件后执行：
 
 ```bat
-cl /nologo /W4 /Iinclude tests\c_api_smoke.c /Fetarget\release\c_api_smoke.exe /Fotarget\release\c_api_smoke.obj /link target\release\posebridge.dll.lib
+cl /nologo /W4 /Iinclude tests\c_api_smoke.c /Fetarget\release\c_api_smoke.exe /Fotarget\release\c_api_smoke.obj /link target\release\posebridge_capi.dll.lib
 target\release\c_api_smoke.exe
 ```
 
-仓库包含 macOS／Windows 原生 CI 配置，但本地创建仓库不代表 CI 已运行。
+macOS／Windows 原生 CI 和本机验证记录见[验证记录](validation.md)。

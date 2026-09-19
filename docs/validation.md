@@ -9,7 +9,7 @@
 - Unix 伪串口测试：2 项通过，覆盖真实异步串口收发与 OSC、拆包、失联恢复、EOF，以及配置回读和不隐式保存。
 - Release CLI → 本机 UDP：Euler 和四元数消息均由独立 Python 解码器验证通过。
 - 真实 C 调用程序：动态库加载 / 链接、版本、结构大小、缓冲不足、无数据、重复轮询、停止和重启通过。
-- 动态库迁移：使用 `@rpath/libposebridge.dylib`，复制到独立临时目录后编译和运行 C 调用程序通过，无本机编译目录依赖。
+- 动态库迁移：使用 `@rpath/libposebridge_capi.dylib`，复制到独立临时目录后编译和运行 C 调用程序通过，无本机编译目录依赖。
 - macOS 动态库最初遇到 strip 后 Mach-O 字符串表对齐错误；关闭额外 strip 后 C 链接与运行通过。
 - 格式与 Clippy：`cargo fmt --all --check` 与 Release 全目标 Clippy（`-D warnings`）通过。
 
@@ -31,7 +31,28 @@ BLE 原始角度在连接初期有变化，尚未完成稳定性、安装方向�
 
 ## 尚未验证
 
-- Windows 原生构建、C ABI 运行及 BLE／USB 实机通信。已提供 CI 与原生 MSVC 检查步骤，尚未运行远端 CI。
 - 仪器上的 50／100／200 Hz 配置效果、Flash 保存持久性和校准结果；配置协议仅通过伪设备回读测试。
 - 最终耳机安装位置的三轴正方向、磁干扰、长期漂移、断电或远离后的真实重连表现。
 - 个人 SOFA、MacinRender OSC 输入和转头到声音变化的整体延迟；本轮不构建或修改音频接收端。
+
+## Windows 本机与 CI
+
+环境：Windows x64（build 26200）、Rust 1.98.0 MSVC、MSVC 14.51、Windows SDK 10.0.26100.0。
+本机通过格式检查、Clippy、8 项跨平台核心测试、Release 构建、头文件一致性、CLI → OSC 与真实 C ABI 迁移调用。
+Unix 伪串口的两项测试不在 Windows 上运行。
+
+[首次双平台 CI](https://github.com/SakuzyPeng/PoseBridge/actions/runs/35435906366) 的 macOS 和 Windows 任务均通过。
+首次 Windows CI 暴露了 C smoke 变量 `small` 与 Windows SDK 宏重名的问题，修复为 `undersized_pose` 后通过。
+原生库随后改用 `posebridge_capi` 文件名，避免 Windows CLI／动态库的 PDB 输出冲突。
+头文件导出在内容相同时保留已有 CRLF 文件，避免仅因换行重写而污染 Windows 工作区。
+
+同一台 `WT901BLE68` 的本机实物结果如下，普通采集保留设备回传配置：
+
+| 路径 | 本次结果 | 限制 |
+|---|---|---|
+| USB 枚举与读取 | COM3，USB-SERIAL CH340；两次 5 秒运行的最后状态均为 47 份角度，约 9.95 Hz；无解析错误或重连 | 已验证正常关闭后重开，未测试运行中物理拔插 |
+| USB → OSC | 4 秒窗口收到 39 个四元数包，地址、类型和单位范数检查通过 | 仅验证数据流，不代表头部安装或音频定位验收 |
+| BLE 角度通知 | 8 秒运行中连接后收到 57 份角度，约 9.93 Hz；无解析错误或重连 | 窗口包含连接建立时间 |
+| BLE 四元数读取 | 8 秒运行的最后状态为 48 份四元数，约 17.70 Hz；无解析错误或重连 | 独立寄存器请求模式，不是 200 Hz 持续推送 |
+
+这些是主机观察的短时通信结果，不是定位精度、长期稳定性或运动到音频延迟的测量。

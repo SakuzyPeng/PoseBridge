@@ -13,5 +13,8 @@ if not headers:
 header = max(headers, key=lambda p: p.stat().st_mtime_ns)
 target = root / "include" / "posebridge.h"
 target.parent.mkdir(exist_ok=True)
-shutil.copyfile(header, target)
+generated = header.read_bytes()
+# Preserve an equivalent CRLF checkout on Windows; only API changes should dirty the tree.
+if not target.exists() or target.read_bytes().replace(b"\r\n", b"\n") != generated.replace(b"\r\n", b"\n"):
+    shutil.copyfile(header, target)
 print(target)

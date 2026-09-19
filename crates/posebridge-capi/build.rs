@@ -1,6 +1,6 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-arg-cdylib=-Wl,-install_name,@rpath/libposebridge.dylib");
+        println!("cargo:rustc-link-arg-cdylib=-Wl,-install_name,@rpath/libposebridge_capi.dylib");
     }
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());

@@ -10,7 +10,7 @@ description = "Experimental C ABI for PoseBridge orientation acquisition"
 build = "build.rs"
 
 [lib]
-name = "posebridge"
+name = "posebridge_capi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
