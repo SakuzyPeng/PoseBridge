@@ -28,7 +28,8 @@
 
 显式配置先发送 `FF AA 69 88 B5` 解锁，等待 100 ms，再写寄存器并读回。
 回传率和输出格式写入后再等待 100 ms，让固件应用配置；读回在总计 3 秒内每 250 ms 重试只读请求，
-避免 BLE 断开后短暂忽略 USB 请求。不重试配置写入／校准；超时不能证明写入未发生。
+避免 BLE 断开后短暂忽略 USB 请求。速率／格式核验遇到旧值时继续只读查询，直至目标值匹配或预算用完；
+持续不匹配返回带实际值的错误。不重试配置写入／校准；超时不能证明写入未发生。
 速率寄存器为 `0x03`，10／50／100／200 Hz 分别为 `0x06`／`0x08`／`0x09`／`0x0B`。
 速率表依据[官方 REG.h](https://github.com/WITMOTION/WitStandardProtocol_JY901/blob/main/Arduino/Arduino_sdk/REG.h)，
 写入方式和校准命令依据[BLE SDK](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0/blob/9efaab0fdd6a06dc807bf80402e58aa91b431c6f/Windows_C%23/Wit.Example_BWT901BLE/ble5/BWT901BLE.cs)。

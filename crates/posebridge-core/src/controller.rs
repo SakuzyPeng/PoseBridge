@@ -548,6 +548,16 @@ async fn read_back(
     address: u16,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<u16> {
+    read_back_matching(connection, address, None, cancel).await
+}
+
+async fn read_back_matching(
+    connection: &mut Connection,
+    address: u16,
+    expected: Option<u16>,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<u16> {
+    let mut last_observed = None;
     transport::cancel_after(cancel, Duration::from_secs(3), async {
         let request = protocol::read_register(address);
         connection.write(&request).await?;
@@ -565,7 +575,14 @@ async fn read_back(
                     for frame in parser.push(&bytes?) {
                         if let Frame::Registers { address: base, values } = frame
                             && address >= base && address - base < 8 {
-                            return Ok(values[(address - base) as usize] as u16);
+                            let observed = values[(address - base) as usize] as u16;
+                            last_observed = Some(observed);
+                            if expected.is_none_or(|wanted| wanted == observed) {
+                                return Ok(observed);
+                            }
+                            // A queued preflight reply or configuration transition
+                            // may still report the old value. Keep reading, never
+                            // repeat the write or treat an old reply as success.
                         }
                     }
                 },
@@ -574,7 +591,12 @@ async fn read_back(
     })
     .await
     .map_err(|e| match e {
-        Error::Timeout(_) => Error::Timeout(format!("readback register 0x{address:02x}")),
+        Error::Timeout(_) => match (expected, last_observed) {
+            (Some(wanted), Some(observed)) => Error::Protocol(format!(
+                "register 0x{address:02x}: requested {wanted}, read back {observed} after verification timeout"
+            )),
+            _ => Error::Timeout(format!("readback register 0x{address:02x}")),
+        },
         other => other,
     })
 }
@@ -624,7 +646,12 @@ async fn apply_command(
         })
         .await?;
     }
-    let observed = read_back(connection, address as u16, cancel).await?;
+    let expected = matches!(
+        command,
+        DeviceCommand::Rate { .. } | DeviceCommand::Output { .. }
+    )
+    .then_some(value);
+    let observed = read_back_matching(connection, address as u16, expected, cancel).await?;
     if matches!(command, DeviceCommand::AccelCalibrate) {
         // This action auto-clears CALSW. A quick zero readback cannot prove that calibration started.
         if observed != 1 {
@@ -912,8 +939,9 @@ mod tests {
         let (mut device, host) = SerialStream::pair().unwrap();
         let mut connection = Connection::Usb(host);
         let (tx, mut cancel) = watch::channel(false);
-        let worker =
-            tokio::spawn(async move { read_back(&mut connection, 0x0e, &mut cancel).await });
+        let worker = tokio::spawn(async move {
+            read_back_matching(&mut connection, 0x0e, Some(0x84), &mut cancel).await
+        });
         let mut command = [0u8; 5];
         for _ in 0..2 {
             tokio::time::timeout(Duration::from_secs(1), device.read_exact(&mut command))
@@ -923,7 +951,14 @@ mod tests {
             assert_eq!(command, protocol::read_register(0x0e));
         }
         let mut response = [0u8; 20];
-        response[..6].copy_from_slice(&[0x55, 0x71, 0x0e, 0, 0x84, 0]);
+        response[..6].copy_from_slice(&[0x55, 0x71, 0x0e, 0, 0x81, 0]);
+        device.write_all(&response).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), device.read_exact(&mut command))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(command, protocol::read_register(0x0e));
+        response[4] = 0x84;
         device.write_all(&response).await.unwrap();
         assert_eq!(worker.await.unwrap().unwrap(), 0x84);
         drop(tx);
@@ -969,10 +1004,12 @@ mod tests {
             } else {
                 assert_eq!(sent[1], protocol::UNLOCK);
                 assert_eq!(sent[2], protocol::write_register(0x0e, 0x84));
-                assert_eq!(
-                    sent.len(),
-                    4,
-                    "preflight, unlock, output, readback only; no save"
+                assert!(sent.len() >= 4);
+                assert!(
+                    sent[3..]
+                        .iter()
+                        .all(|command| *command == protocol::read_register(0x0e)),
+                    "verification may repeat reads only; no implicit write or save"
                 );
             }
             server.abort();
