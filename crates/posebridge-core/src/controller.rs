@@ -297,6 +297,13 @@ fn emit(shared: &SharedRef, sender: &mut Option<Sender>) -> Result<()> {
     Ok(())
 }
 
+async fn wait_for_output(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool>) -> Result<()> {
     let mut sender = config.osc.clone().map(Sender::new).transpose()?;
     if let Source::Simulate {
@@ -309,9 +316,8 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
         let start = Instant::now();
         let mut sampling = tokio::time::interval(Duration::from_secs_f64(1.0 / rate_hz as f64));
         sampling.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut output = tokio::time::interval(Duration::from_millis(5));
-        output.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            let output_deadline = sender.as_ref().and_then(Sender::deadline);
             tokio::select! {
                 _ = cancel.changed() => return Err(Error::Cancelled),
                 _ = sampling.tick() => {
@@ -326,8 +332,9 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
                         Pattern::Wrap => angles[0] = (170.0 + t*20.0 + 180.0).rem_euclid(360.0)-180.0,
                     }
                     publish(&shared,pose::from_euler(angles)?,&RawData::default(),start)?;
+                    emit(&shared,&mut sender)?;
                 },
-                _ = output.tick() => emit(&shared,&mut sender)?,
+                _ = wait_for_output(output_deadline) => emit(&shared,&mut sender)?,
             }
         }
     }
@@ -390,9 +397,12 @@ async fn pump(
         .ok_or_else(|| Error::Invalid("mounting required".into()))?;
     let mut next_request = start;
     let mut outstanding: Option<Instant> = None;
-    let mut ticks = tokio::time::interval(Duration::from_millis(5));
+    // This timer only services health checks and optional register requests.
+    // OSC is driven by incoming poses and its own pending-send deadline.
+    let mut ticks = tokio::time::interval(Duration::from_millis(20));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        let output_deadline = sender.as_ref().and_then(Sender::deadline);
         tokio::select! {
             _ = cancel.changed() => return Err(Error::Cancelled),
             bytes = connection.read() => {
@@ -424,13 +434,14 @@ async fn pump(
                     }
                 }
                 lock(shared).status.discarded_bytes=parser.discarded_bytes;
-            },
-            _ = ticks.tick() => {
                 emit(shared,sender)?;
+            },
+            _ = wait_for_output(output_deadline) => emit(shared,sender)?,
+            _ = ticks.tick() => {
                 let now = Instant::now();
                 if now.duration_since(start) >= STALE_AFTER {
                     let mut state = lock(shared);
-                    if state.pose.is_none() {
+                    if state.pose.is_none() || !fresh(&state, now) {
                         state.status.state = ConnectionState::Stale;
                     }
                 }
