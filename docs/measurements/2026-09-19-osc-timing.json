@@ -1,0 +1,871 @@
+{
+  "date": "2026-09-19",
+  "build": "Release",
+  "revisions": {
+    "baseline": "0daabe1",
+    "osc_scheduler": "4cb92c6",
+    "ble_diagnostics": "6f5857e",
+    "final_code": "950f87b"
+  },
+  "notes": [
+    "Every OSC benchmark explicitly requested 200 Hz except the USB 100 Hz follow-up.",
+    "These are host receive times, not device sampling timestamps or motion-to-audio latency.",
+    "Runs are sequential short windows, not a long-duration reliability guarantee."
+  ],
+  "baseline_sweep": {
+    "original_register": 6,
+    "restored": true,
+    "measurements": [
+      {
+        "path": "mac_usb_raw",
+        "configured_hz": 50,
+        "frames": 496,
+        "frame_hz": 49.649584058548456,
+        "read_event_hz": 49.650467838722044,
+        "max_frames_per_read": 1,
+        "consecutive_identical_angles": 323,
+        "host_frame_gaps": {
+          "p50_ms": 20.164625020697713,
+          "p95_ms": 21.435625036247075,
+          "max_ms": 24.52479104977101
+        }
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 49.65177519730909,
+        "last_status": {
+          "actual_rate_hz": 49.65182150794872,
+          "bytes_received": 11820,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 591,
+          "interval_max_ms": 24.212291,
+          "interval_min_ms": 16.097792,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 591,
+          "pose_count": 591,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 49.6619920028279,
+        "osc_gaps": {
+          "p50_ms": 20.10074956342578,
+          "p95_ms": 25.569707970134914,
+          "max_ms": 28.042874997481704
+        },
+        "osc_packets": 603,
+        "path": "mac_usb_bridge",
+        "configured_hz": 50
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 49.71741862190773,
+        "last_status": {
+          "actual_rate_hz": 49.832131490830214,
+          "bytes_received": 8960,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 448,
+          "interval_max_ms": 89.91029999999999,
+          "interval_min_ms": 0.0003,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 222,
+          "pose_count": 448,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 24.529503777488934,
+        "osc_gaps": {
+          "p50_ms": 33.13669999999958,
+          "p95_ms": 71.57959999999974,
+          "max_ms": 89.9788000000008
+        },
+        "osc_packets": 228,
+        "path": "windows_ble_bridge",
+        "configured_hz": 50
+      },
+      {
+        "path": "mac_usb_raw",
+        "configured_hz": 100,
+        "frames": 809,
+        "frame_hz": 80.94261076224929,
+        "read_event_hz": 80.98595545564382,
+        "max_frames_per_read": 1,
+        "consecutive_identical_angles": 724,
+        "host_frame_gaps": {
+          "p50_ms": 10.094166442286223,
+          "p95_ms": 10.871583013795316,
+          "max_ms": 1853.472042013891
+        }
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 99.30315235318145,
+        "last_status": {
+          "actual_rate_hz": 99.30350234337881,
+          "bytes_received": 23622,
+          "configuration_report": null,
+          "discarded_bytes": 2,
+          "frames_received": 1181,
+          "interval_max_ms": 14.029665999999999,
+          "interval_min_ms": 6.083334,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 1181,
+          "pose_count": 1181,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 99.29003803964441,
+        "osc_gaps": {
+          "p50_ms": 10.063417023047805,
+          "p95_ms": 14.057541033253074,
+          "max_ms": 19.42791696637869
+        },
+        "osc_packets": 1206,
+        "path": "mac_usb_bridge",
+        "configured_hz": 100
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 99.11636798748499,
+        "last_status": {
+          "actual_rate_hz": 99.7248868832405,
+          "bytes_received": 14560,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 728,
+          "interval_max_ms": 60.3839,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 182,
+          "pose_count": 728,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 24.783280917204138,
+        "osc_gaps": {
+          "p50_ms": 32.231300000000296,
+          "p95_ms": 72.11210000000001,
+          "max_ms": 81.84840000000015
+        },
+        "osc_packets": 188,
+        "path": "windows_ble_bridge",
+        "configured_hz": 100
+      },
+      {
+        "path": "mac_usb_raw",
+        "configured_hz": 200,
+        "frames": 1618,
+        "frame_hz": 161.8991203924578,
+        "read_event_hz": 161.87806636166047,
+        "max_frames_per_read": 1,
+        "consecutive_identical_angles": 1599,
+        "host_frame_gaps": {
+          "p50_ms": 5.037166993133724,
+          "p95_ms": 6.56254100613296,
+          "max_ms": 1851.2142499675974
+        }
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 198.60867629652026,
+        "last_status": {
+          "actual_rate_hz": 198.6076433558243,
+          "bytes_received": 47309,
+          "configuration_report": null,
+          "discarded_bytes": 9,
+          "frames_received": 2365,
+          "interval_max_ms": 9.579,
+          "interval_min_ms": 0.46987500000000004,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 1454,
+          "pose_count": 2365,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 122.67213517676444,
+        "osc_gaps": {
+          "p50_ms": 9.290750022046268,
+          "p95_ms": 10.96099999267608,
+          "max_ms": 15.205291914753616
+        },
+        "osc_packets": 1485,
+        "path": "mac_usb_bridge",
+        "configured_hz": 200
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 198.70512467079973,
+        "last_status": {
+          "actual_rate_hz": 199.445398306809,
+          "bytes_received": 36160,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 1808,
+          "interval_max_ms": 89.5826,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 221,
+          "pose_count": 1808,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 24.48329312800868,
+        "osc_gaps": {
+          "p50_ms": 32.000599999999935,
+          "p95_ms": 73.54649999999907,
+          "max_ms": 93.64779999999939
+        },
+        "osc_packets": 228,
+        "path": "windows_ble_bridge",
+        "configured_hz": 200
+      }
+    ],
+    "restored_register": 6
+  },
+  "scheduler_followup": {
+    "original_register": 6,
+    "restored": true,
+    "measurements": [
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 199.34096238273335,
+        "last_status": {
+          "actual_rate_hz": 199.46874484821797,
+          "bytes_received": 0,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 0,
+          "interval_max_ms": 10.503833,
+          "interval_min_ms": 1.236625,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 1558,
+          "pose_count": 1564,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 197.9783153446495,
+        "osc_gaps": {
+          "p50_ms": 4.738208488561213,
+          "p95_ms": 6.936707999557257,
+          "max_ms": 10.316416970454156
+        },
+        "osc_packets": 1608,
+        "path": "simulate_200"
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 198.62885271404,
+        "last_status": {
+          "actual_rate_hz": 198.60659867355022,
+          "bytes_received": 59402,
+          "configuration_report": null,
+          "discarded_bytes": 2,
+          "frames_received": 2970,
+          "interval_max_ms": 13.3375,
+          "interval_min_ms": 0.001083,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 2958,
+          "pose_count": 2970,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 197.86130905032687,
+        "osc_gaps": {
+          "p50_ms": 5.045040976256132,
+          "p95_ms": 7.002791971899569,
+          "max_ms": 24.61550000589341
+        },
+        "osc_packets": 3010,
+        "path": "usb_200"
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 99.30562204287759,
+        "last_status": {
+          "actual_rate_hz": 99.3138942681289,
+          "bytes_received": 23680,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 1184,
+          "interval_max_ms": 14.793333,
+          "interval_min_ms": 5.345083,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 1183,
+          "pose_count": 1184,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 99.3153296881244,
+        "osc_gaps": {
+          "p50_ms": 10.095832985825837,
+          "p95_ms": 11.525042005814612,
+          "max_ms": 15.134791028685868
+        },
+        "osc_packets": 1208,
+        "path": "usb_100"
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "input_hz": 198.6414709037878,
+        "last_status": {
+          "actual_rate_hz": 199.1434815941092,
+          "bytes_received": 53900,
+          "configuration_report": null,
+          "discarded_bytes": 0,
+          "frames_received": 2695,
+          "interval_max_ms": 93.313833,
+          "interval_min_ms": 0.000166,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 337,
+          "pose_count": 2695,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "osc_hz": 24.81484161928478,
+        "osc_gaps": {
+          "p50_ms": 31.15943749435246,
+          "p95_ms": 62.6312920358032,
+          "max_ms": 93.23337499517947
+        },
+        "osc_packets": 344,
+        "path": "mac_ble_200"
+      }
+    ],
+    "restored_register": 6
+  },
+  "mac_ble_diagnostics": {
+    "exit": 0,
+    "stderr": "",
+    "invalid_packets": [],
+    "osc_packets": 292,
+    "warmup_seconds": 3,
+    "last_status": {
+      "actual_rate_hz": 199.29975547973368,
+      "ble_link": {
+        "connection_interval_ms": null,
+        "note": "connection parameters are managed by the OS; this backend does not expose them",
+        "peripheral_latency": null,
+        "request_status": null,
+        "requested_mode": "default"
+      },
+      "bytes_received": 45580,
+      "configuration_report": null,
+      "delivery": {
+        "gap_histogram": [
+          3,
+          11,
+          92,
+          178,
+          0
+        ],
+        "max_bytes_per_read": 160,
+        "max_frames_per_read": 8,
+        "max_gap_ms": 93.058792,
+        "reads": 285
+      },
+      "discarded_bytes": 0,
+      "frames_received": 2279,
+      "interval_max_ms": 93.042,
+      "interval_min_ms": 0.000167,
+      "invalid_poses": 0,
+      "last_error": null,
+      "osc_sent": 285,
+      "pose_count": 2279,
+      "reconnect_count": 0,
+      "session_id": 1,
+      "state": "active"
+    },
+    "input_hz": 198.81092488135602,
+    "osc_hz": 24.830148898057463,
+    "osc_gaps": {
+      "p50_ms": 30.71037499466911,
+      "p95_ms": 64.57449996378273,
+      "max_ms": 92.18874992802739
+    }
+  },
+  "windows_ble_preference_restore_check": {
+    "measurements": [
+      {
+        "exit": 0,
+        "stderr": "",
+        "invalid_packets": [],
+        "osc_packets": 273,
+        "warmup_seconds": 3,
+        "last_status": {
+          "actual_rate_hz": 199.39890616017564,
+          "ble_link": {
+            "connection_interval_ms": 30.0,
+            "note": null,
+            "peripheral_latency": 10,
+            "request_status": null,
+            "requested_mode": "default"
+          },
+          "bytes_received": 42720,
+          "configuration_report": null,
+          "delivery": {
+            "gap_histogram": [
+              0,
+              7,
+              84,
+              175,
+              0
+            ],
+            "max_bytes_per_read": 160,
+            "max_frames_per_read": 8,
+            "max_gap_ms": 89.1937,
+            "reads": 267
+          },
+          "discarded_bytes": 0,
+          "frames_received": 2136,
+          "interval_max_ms": 89.2129,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 267,
+          "pose_count": 2136,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "input_hz": 198.38948006717033,
+        "osc_hz": 24.872814692808493,
+        "osc_gaps": {
+          "p50_ms": 30.111800000000244,
+          "p95_ms": 60.22879999999997,
+          "max_ms": 89.23969999999848
+        },
+        "mode": "default",
+        "index": 0
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "invalid_packets": [],
+        "osc_packets": 224,
+        "warmup_seconds": 3,
+        "last_status": {
+          "actual_rate_hz": 200.17997737562436,
+          "ble_link": {
+            "connection_interval_ms": 15.0,
+            "note": null,
+            "peripheral_latency": 0,
+            "request_status": "success",
+            "requested_mode": "throughput"
+          },
+          "bytes_received": 34720,
+          "configuration_report": null,
+          "delivery": {
+            "gap_histogram": [
+              1,
+              1,
+              35,
+              179,
+              0
+            ],
+            "max_bytes_per_read": 160,
+            "max_frames_per_read": 8,
+            "max_gap_ms": 60.1175,
+            "reads": 217
+          },
+          "discarded_bytes": 0,
+          "frames_received": 1736,
+          "interval_max_ms": 60.118900000000004,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 217,
+          "pose_count": 1736,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "input_hz": 198.2147590964679,
+        "osc_hz": 24.87343524729905,
+        "osc_gaps": {
+          "p50_ms": 44.908200000000065,
+          "p95_ms": 59.12969999999973,
+          "max_ms": 60.153900000001315
+        },
+        "mode": "throughput",
+        "index": 1
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "invalid_packets": [],
+        "osc_packets": 254,
+        "warmup_seconds": 3,
+        "last_status": {
+          "actual_rate_hz": 199.5076316649257,
+          "ble_link": {
+            "connection_interval_ms": 30.0,
+            "note": null,
+            "peripheral_latency": 10,
+            "request_status": null,
+            "requested_mode": "default"
+          },
+          "bytes_received": 39680,
+          "configuration_report": null,
+          "delivery": {
+            "gap_histogram": [
+              0,
+              14,
+              71,
+              162,
+              0
+            ],
+            "max_bytes_per_read": 160,
+            "max_frames_per_read": 8,
+            "max_gap_ms": 90.033,
+            "reads": 248
+          },
+          "discarded_bytes": 0,
+          "frames_received": 1984,
+          "interval_max_ms": 90.03179999999999,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 248,
+          "pose_count": 1984,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "input_hz": 199.07087967824248,
+        "osc_hz": 24.959532440747914,
+        "osc_gaps": {
+          "p50_ms": 30.186500000001004,
+          "p95_ms": 60.27459999999962,
+          "max_ms": 90.06899999999973
+        },
+        "mode": "default",
+        "index": 2
+      }
+    ],
+    "original_register": 6,
+    "restored": true,
+    "restored_register": 6
+  },
+  "windows_simulator_before_timer_fix": {
+    "exit": 0,
+    "stderr": "",
+    "invalid_packets": [],
+    "osc_packets": 956,
+    "warmup_seconds": 3,
+    "last_status": {
+      "actual_rate_hz": 63.61492877169352,
+      "ble_link": null,
+      "bytes_received": 0,
+      "configuration_report": null,
+      "delivery": {
+        "gap_histogram": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "max_bytes_per_read": 0,
+        "max_frames_per_read": 0,
+        "max_gap_ms": 0.0,
+        "reads": 0
+      },
+      "discarded_bytes": 0,
+      "frames_received": 0,
+      "interval_max_ms": 17.0731,
+      "interval_min_ms": 14.6473,
+      "invalid_poses": 0,
+      "last_error": null,
+      "osc_sent": 939,
+      "pose_count": 939,
+      "reconnect_count": 0,
+      "session_id": 1,
+      "state": "active"
+    },
+    "input_hz": 63.638025796473585,
+    "osc_hz": 63.610950365332926,
+    "osc_gaps": {
+      "p50_ms": 15.66819999999991,
+      "p95_ms": 16.549299999999434,
+      "max_ms": 16.976300000001388
+    }
+  },
+  "windows_simulator_after_timer_fix": {
+    "exit": 0,
+    "stderr": "",
+    "invalid_packets": [],
+    "osc_packets": 3004,
+    "warmup_seconds": 3,
+    "last_status": {
+      "actual_rate_hz": 200.00391609428667,
+      "ble_link": null,
+      "bytes_received": 0,
+      "configuration_report": null,
+      "delivery": {
+        "gap_histogram": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "max_bytes_per_read": 0,
+        "max_frames_per_read": 0,
+        "max_gap_ms": 0.0,
+        "reads": 0
+      },
+      "discarded_bytes": 0,
+      "frames_received": 0,
+      "interval_max_ms": 7.1731,
+      "interval_min_ms": 2.9247,
+      "invalid_poses": 0,
+      "last_error": null,
+      "osc_sent": 2954,
+      "pose_count": 2954,
+      "reconnect_count": 0,
+      "session_id": 1,
+      "state": "active"
+    },
+    "input_hz": 199.9995119421376,
+    "osc_hz": 200.00692824665305,
+    "osc_gaps": {
+      "p50_ms": 5.104199999999892,
+      "p95_ms": 7.101600000000374,
+      "max_ms": 7.763699999999929
+    }
+  },
+  "final_windows_ble": {
+    "measurements": [
+      {
+        "exit": 0,
+        "stderr": "",
+        "invalid_packets": [],
+        "osc_packets": 309,
+        "warmup_seconds": 3,
+        "last_status": {
+          "actual_rate_hz": 199.11834374824446,
+          "ble_link": {
+            "connection_interval_ms": 30.0,
+            "note": null,
+            "peripheral_latency": 10,
+            "request_status": null,
+            "requested_mode": "default"
+          },
+          "bytes_received": 48480,
+          "configuration_report": null,
+          "delivery": {
+            "gap_histogram": [
+              0,
+              7,
+              104,
+              191,
+              0
+            ],
+            "max_bytes_per_read": 160,
+            "max_frames_per_read": 8,
+            "max_gap_ms": 90.0864,
+            "reads": 303
+          },
+          "discarded_bytes": 0,
+          "frames_received": 2424,
+          "interval_max_ms": 90.0841,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 303,
+          "pose_count": 2424,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "input_hz": 198.22295124218735,
+        "osc_hz": 24.81278329036888,
+        "osc_gaps": {
+          "p50_ms": 30.07029999999844,
+          "p95_ms": 60.275999999999996,
+          "max_ms": 90.09339999999888
+        },
+        "mode": "default"
+      },
+      {
+        "exit": 0,
+        "stderr": "",
+        "invalid_packets": [],
+        "osc_packets": 270,
+        "warmup_seconds": 3,
+        "last_status": {
+          "actual_rate_hz": 199.6088913875354,
+          "ble_link": {
+            "connection_interval_ms": 15.0,
+            "note": null,
+            "peripheral_latency": 0,
+            "request_status": "success",
+            "requested_mode": "throughput"
+          },
+          "bytes_received": 42240,
+          "configuration_report": null,
+          "delivery": {
+            "gap_histogram": [
+              0,
+              0,
+              58,
+              205,
+              0
+            ],
+            "max_bytes_per_read": 160,
+            "max_frames_per_read": 8,
+            "max_gap_ms": 60.2713,
+            "reads": 264
+          },
+          "discarded_bytes": 0,
+          "frames_received": 2112,
+          "interval_max_ms": 60.2877,
+          "interval_min_ms": 0.00019999999999999998,
+          "invalid_poses": 0,
+          "last_error": null,
+          "osc_sent": 264,
+          "pose_count": 2112,
+          "reconnect_count": 0,
+          "session_id": 1,
+          "state": "active"
+        },
+        "input_hz": 198.61161701293946,
+        "osc_hz": 24.838933991716953,
+        "osc_gaps": {
+          "p50_ms": 44.9300000000008,
+          "p95_ms": 45.29349999999965,
+          "max_ms": 60.13230000000025
+        },
+        "mode": "throughput"
+      }
+    ],
+    "original_register": 6,
+    "restored": true,
+    "restored_register": 6
+  },
+  "final_mac_usb_euler": {
+    "exit": 0,
+    "stderr": "",
+    "invalid_packets": [],
+    "osc_packets": 2979,
+    "warmup_seconds": 3,
+    "last_status": {
+      "actual_rate_hz": 198.6084369634631,
+      "ble_link": null,
+      "bytes_received": 59044,
+      "configuration_report": null,
+      "delivery": {
+        "gap_histogram": [
+          2,
+          2940,
+          5,
+          0,
+          0
+        ],
+        "max_bytes_per_read": 40,
+        "max_frames_per_read": 2,
+        "max_gap_ms": 11.883292,
+        "reads": 2948
+      },
+      "discarded_bytes": 4,
+      "frames_received": 2952,
+      "interval_max_ms": 11.882333000000001,
+      "interval_min_ms": 0.0006670000000000001,
+      "invalid_poses": 0,
+      "last_error": null,
+      "osc_sent": 2928,
+      "pose_count": 2952,
+      "reconnect_count": 0,
+      "session_id": 1,
+      "state": "active"
+    },
+    "input_hz": 198.60779288907892,
+    "osc_hz": 197.01592232750863,
+    "osc_gaps": {
+      "p50_ms": 5.041020980570465,
+      "p95_ms": 7.3144580237567425,
+      "max_ms": 11.878333985805511
+    }
+  },
+  "final_mac_usb_native_quaternion": {
+    "exit": 0,
+    "stderr": "",
+    "invalid_packets": [],
+    "osc_packets": 635,
+    "warmup_seconds": 3,
+    "last_status": {
+      "actual_rate_hz": 41.95480949400034,
+      "ble_link": null,
+      "bytes_received": 71670,
+      "configuration_report": null,
+      "delivery": {
+        "gap_histogram": [
+          9,
+          2944,
+          3,
+          0,
+          0
+        ],
+        "max_bytes_per_read": 60,
+        "max_frames_per_read": 3,
+        "max_gap_ms": 11.604833,
+        "reads": 2957
+      },
+      "discarded_bytes": 10,
+      "frames_received": 3583,
+      "interval_max_ms": 30.939874999999997,
+      "interval_min_ms": 19.952959,
+      "invalid_poses": 0,
+      "last_error": null,
+      "osc_sent": 625,
+      "pose_count": 625,
+      "reconnect_count": 0,
+      "session_id": 1,
+      "state": "active"
+    },
+    "input_hz": 41.848202367218406,
+    "osc_hz": 41.8353564977264,
+    "osc_gaps": {
+      "p50_ms": 24.77106248261407,
+      "p95_ms": 27.468709042295814,
+      "max_ms": 30.919875018298626
+    }
+  },
+  "final_device_restoration": {
+    "original_register": 6,
+    "restored_register": 6,
+    "restored": true,
+    "observed_hz": 9.930166438173023
+  }
+}
