@@ -4,6 +4,9 @@ version.workspace = true
 # cbindgen 0.27 understands the traditional no_mangle spelling.
 edition = "2021"
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Experimental C ABI for PoseBridge orientation acquisition"
 build = "build.rs"
 
 [lib]
