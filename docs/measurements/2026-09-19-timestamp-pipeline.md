@@ -39,8 +39,47 @@
 
 机器可读结果：[timestamp-pipeline.json](2026-09-19-timestamp-pipeline.json)。
 
-## Windows 与限制
+## Windows 原生软件验证
 
-Windows 原生验证另行记录，不能由上述 macOS 结果代替。Windows 真机 USB 时间戳、设备物理断线、
-安装方向、漂移、时钟同步和运动到音频总延迟尚未作为本次通过项。
-本次只上报元数据，没有预测、插值补帧或延迟补偿。
+Windows x64、Rust 1.98 MSVC、MSVC 14.51，使用已有工具链、全局 Cargo 缓存与单一 target 目录。
+通过雷电网桥同步 Git 提交，没有创建新工作树或重新获取完整渲染依赖。
+
+- 格式检查、全目标 Release Clippy、17 项可在 Windows 运行的 Rust 测试、Release workspace 构建通过。
+  其余 6 项 Unix 伪串口测试仅在 macOS 运行；未声称 Windows 执行这些测试。
+- 生成头文件一致性、真实 C ABI 程序（包含新旧结构与缓冲区契约）、CLI 独立 v1/v2 解码六种组合通过。
+- kind=2 模拟器在 200 Hz 配置下，本机 OSC 接收约 200.03 Hz，无无效报文；该数值不替代硬件输入率。
+- Render 接收器／协议源文件和完整 `adm_c_api.cpp` 翻译单元经 MSVC 编译，纯 C 头文件布局检查运行通过。
+  最小 C++ 接收程序在 v1/v2 × Euler/四元数四组中各收 100 份姿态，无拒绝包；
+  v2 时间精确匹配、停止失活、端口独占／释放通过。
+- Windows 没有完整渲染依赖缓存，所以没有构建或运行完整 Render C ABI DLL；这项范围与 macOS 动态库验证分开记录。
+
+## Windows 真机：COM4／BLE → PoseBridge C ABI → OSC v2 → Render C++
+
+用户将同一传感器移到 Windows USB，枚举为 USB-SERIAL CH340（COM4）。先恢复并读回已知原配置，再显式设置 200 Hz 档。
+每组采集窗口约 6 秒，接收程序额外等待以验证停止后 stale；设备数值和安装方向不作定位精度证据。
+
+| 输入 | 输出配置 | 完整源采样数 | 主机观察采样率 Hz | Render 收到包数 | 重新同步丢弃字节 |
+|---|---|---:|---:|---:|---:|
+| USB | `timestamp-euler` | 1192 | 199.50 | 271 | 6 |
+| BLE | `timestamp-euler` | 1200 | 200.89 | 150 | 0 |
+| USB | `timestamp-quaternion` | 1193 | 199.51 | 279 | 5 |
+| BLE | `timestamp-quaternion` | 1200 | 200.80 | 150 | 0 |
+| USB | `timestamp-gyro-quaternion` | 1194 | 199.36 | 280 | 0 |
+| BLE | `timestamp-gyro-quaternion` | 1200 | 200.83 | 150 | 0 |
+
+- 六组都为 kind=1、epoch=1，每跨越一个源采样序号，设备时间推进 5 ms；没有非法帧、非法姿态或 Render 拒绝包。
+  最终接收元数据与 PoseBridge 原子快照／采样序列匹配，四元数范数为 1；停止后进入 stale，端口正常释放。
+- Windows USB 虽收到约 200 个采样／秒，但本轮主机读取存在批量交付，最新值合并后仅约 45–47 个 OSC 包／秒。
+  BLE 为每批最多 8 帧，约 25 包／秒。不能用设备采样率或 Windows 模拟器 200 Hz 结果冒充硬件 OSC 速率；
+  本轮没有定位或优化 Windows USB 批量交付的驱动／运行时贡献。
+- 切换格式时曾读回旧值。核验现在只重复读取，直到目标值匹配或 3 秒预算用完；不会自动重写设置。
+  持续不匹配仍返回错误。修正后全矩阵的切换与恢复均回读成功，相关伪串口回归覆盖旧回复与请求丢失。
+- 结束已由 Windows CLI 读回恢复 `RRATE=6, output=97`（10 Hz、默认输出）；未 SAVE、校准或修改 RTC。
+- 一次早期验证中设备从 Mac 移到 Windows，Mac 无法继续恢复；识别 COM4 后先在 Windows 恢复原值，再开始上述完整矩阵。
+
+机器可读结果：[timestamp-windows.json](2026-09-19-timestamp-windows.json)。
+
+## 尚未作为通过项
+
+运行中物理断线重连、最终安装方向、磁干扰／长期漂移、跨时钟同步和运动到音频总延迟。
+本次只上报元数据，没有 GUI 适配、预测、插值补帧或延迟补偿；Windows 完整 Render DLL 运行验证仍依赖其渲染构建环境。
