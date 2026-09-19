@@ -4,6 +4,9 @@
 macOS Apple Silicon 与 Windows x64 原生 Release；USB 接在 Mac，BLE 分别连接两台电脑。
 本轮没有验证 Windows USB 高频，也没有构建或测试 MacinRender 音频链路。
 
+后续 [macOS BLE 探索](2026-09-19-ble-exploration.md) 补充了厂商打包说明、设备版本号、新格式主动四元数与时间戳实测；
+本文保留初次修复阶段的结论和数据。
+
 ## 修复结果
 
 | 路径 | 修复前 OSC | 修复后 OSC | 当前限制 |

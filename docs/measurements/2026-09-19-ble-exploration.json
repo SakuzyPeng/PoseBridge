@@ -1,0 +1,1068 @@
+{
+  "date": "2026-09-19",
+  "platform": "macOS Apple Silicon",
+  "build": "Release",
+  "production_baseline": "4b88a9b",
+  "registers_before": {
+    "0x3": 6,
+    "0xe": 97,
+    "0x1f": 4,
+    "0x2e": 13115,
+    "0x24": 0,
+    "0x25": 30,
+    "0x2a": 500
+  },
+  "registers_after": {
+    "0x3": 6,
+    "0xe": 97,
+    "0x1f": 4,
+    "0x2e": 13115,
+    "0x24": 0,
+    "0x25": 30,
+    "0x2a": 500
+  },
+  "all_original_registers_match": true,
+  "device_version": {
+    "raw": "55712e003b3300000f01010315304803070077fe",
+    "version": "13115",
+    "words": [
+      13115,
+      0,
+      271,
+      769,
+      12309,
+      840,
+      7,
+      65143
+    ],
+    "encoding": "legacy integer; extended version encoding applies only when bit 31 is set (official SDK)"
+  },
+  "format_sweep": {
+    "original": {
+      "rate": 6,
+      "mask": 97
+    },
+    "measurements": [
+      {
+        "changed_angle_pairs": 4,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 198,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 1584
+        },
+        "notification_gaps": {
+          "max_ms": 89.05662499999956,
+          "p50_ms": 31.31549999999983,
+          "p95_ms": 61.88429200000023
+        },
+        "notification_hz": 24.87410077744026,
+        "notification_sizes": {
+          "160": 198
+        },
+        "notifications": 198,
+        "pose_frames": 1584,
+        "pose_notification_hz": 24.75,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 1584,
+        "stream_hz": 199.87665751618238,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "default200",
+        "rate_register": 11,
+        "mask_register": 97,
+        "stream_hz_window": 198.0,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 17,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 198,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 792
+        },
+        "notification_gaps": {
+          "max_ms": 66.35658300000014,
+          "p50_ms": 30.85283400000005,
+          "p95_ms": 61.608458000000255
+        },
+        "notification_hz": 24.874130350449505,
+        "notification_sizes": {
+          "80": 198
+        },
+        "notifications": 198,
+        "pose_frames": 792,
+        "pose_notification_hz": 24.75,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 792,
+        "stream_hz": 99.87531526500284,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "default100",
+        "rate_register": 9,
+        "mask_register": 97,
+        "stream_hz_window": 99.0,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 7,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 159,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 159
+        },
+        "notification_gaps": {
+          "max_ms": 96.22616600000012,
+          "p50_ms": 58.539375000000504,
+          "p95_ms": 90.21645900000053
+        },
+        "notification_hz": 19.798633072724833,
+        "notification_sizes": {
+          "20": 159
+        },
+        "notifications": 159,
+        "pose_frames": 159,
+        "pose_notification_hz": 19.875,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 159,
+        "stream_hz": 19.798633072724833,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "default20",
+        "rate_register": 7,
+        "mask_register": 97,
+        "stream_hz_window": 19.875,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 5,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x01": 1592
+        },
+        "notification_gaps": {
+          "max_ms": 64.11112500000016,
+          "p50_ms": 30.727791999999532,
+          "p95_ms": 61.73379099999998
+        },
+        "notification_hz": 24.816402877756452,
+        "notification_sizes": {
+          "64": 199
+        },
+        "notifications": 199,
+        "pose_frames": 1592,
+        "pose_notification_hz": 24.875,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 1592,
+        "stream_hz": 199.40857059853795,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "angles200",
+        "rate_register": 11,
+        "mask_register": 1,
+        "stream_hz_window": 199.0,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 0,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x04": 1592
+        },
+        "notification_gaps": {
+          "max_ms": 64.4151660000003,
+          "p50_ms": 31.208999999999598,
+          "p95_ms": 61.321415999999296
+        },
+        "notification_hz": 24.805056630860697,
+        "notification_sizes": {
+          "80": 199
+        },
+        "notifications": 199,
+        "pose_frames": 1592,
+        "pose_notification_hz": 24.875,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 1592,
+        "stream_hz": 199.31739949343117,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "quaternion200",
+        "rate_register": 11,
+        "mask_register": 4,
+        "stream_hz_window": 199.0,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 9,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x81": 1592
+        },
+        "notification_gaps": {
+          "max_ms": 63.23679199999965,
+          "p50_ms": 31.26300000000093,
+          "p95_ms": 61.41408300000073
+        },
+        "notification_hz": 24.912378362118393,
+        "notification_sizes": {
+          "128": 199
+        },
+        "notifications": 199,
+        "pose_frames": 1592,
+        "pose_notification_hz": 24.875,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 1592,
+        "stream_hz": 200.17976754611294,
+        "timestamp_delta_ms_histogram": {
+          "5": 1591
+        },
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "timestamp_angles200",
+        "rate_register": 11,
+        "mask_register": 129,
+        "stream_hz_window": 199.0,
+        "validity": "No framing loss observed; static device capture, not a physical motion validation."
+      },
+      {
+        "changed_angle_pairs": 403,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 971,
+        "flags": {
+          "0xe1": 1393
+        },
+        "notification_gaps": {
+          "max_ms": 63.852499999999424,
+          "p50_ms": 31.190916999999985,
+          "p95_ms": 61.862582999999916
+        },
+        "notification_hz": 24.817205768759482,
+        "notification_sizes": {
+          "200": 199
+        },
+        "notifications": 199,
+        "pose_frames": 1393,
+        "pose_notification_hz": 24.875,
+        "register": null,
+        "request_timeouts": 0,
+        "requests": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "stream_frames": 1393,
+        "stream_hz": 174.47247691976364,
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "timestamp_motion200",
+        "rate_register": 11,
+        "mask_register": 225,
+        "stream_hz_window": 174.125,
+        "validity": "UNRELIABLE: framing loss and impossible timestamp deltas; frame-rate/pose-change counts must not be treated as valid sensor measurements.",
+        "timestamp_delta_summary": {
+          "five_ms": 994,
+          "other": 398
+        }
+      }
+    ],
+    "restored": true,
+    "final": {
+      "rate": 6,
+      "mask": 97
+    },
+    "error": "Stopped before full200 measurement: its configuration readback timed out in all three attempts; finally restored original rate and mask."
+  },
+  "poll_sweep": {
+    "original": {
+      "rate": 6,
+      "mask": 97
+    },
+    "measurements": [
+      {
+        "changed_angle_pairs": 9,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 158,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 79,
+          "0x71": 125
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 122.19787499999946,
+          "p50_ms": 59.205582999998896,
+          "p95_ms": 89.30212500000012
+        },
+        "notification_hz": 19.67489245305901,
+        "notification_sizes": {
+          "20": 112,
+          "40": 46
+        },
+        "notifications": 158,
+        "pose_frames": 79,
+        "pose_notification_hz": 19.75,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 61,
+        "request_timeouts": 0,
+        "requests_including_warmup": 157,
+        "response_hz": 15.53940550432686,
+        "responses": 125,
+        "seconds": 8,
+        "start_unix_ns": "1789821141973956000",
+        "stream_frames": 79,
+        "stream_hz": 9.875,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "angles_single_response_10",
+        "rate_register": 6,
+        "mask_register": 97,
+        "poll_arguments": [
+          "--register",
+          "0x3d",
+          "--poll-hz",
+          "50",
+          "--window",
+          "1",
+          "--write-mode",
+          "response"
+        ]
+      },
+      {
+        "changed_angle_pairs": 3,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 157,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 80,
+          "0x71": 131
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 93.40395800000056,
+          "p50_ms": 59.080583000000075,
+          "p95_ms": 62.23987500000039
+        },
+        "notification_hz": 19.62290386889283,
+        "notification_sizes": {
+          "20": 103,
+          "40": 54
+        },
+        "notifications": 157,
+        "pose_frames": 80,
+        "pose_notification_hz": 19.625,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 61,
+        "request_timeouts": 1,
+        "requests_including_warmup": 168,
+        "response_hz": 16.352419890744027,
+        "responses": 131,
+        "seconds": 8,
+        "start_unix_ns": "1789821159585221000",
+        "stream_frames": 80,
+        "stream_hz": 10.0,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "angles_pipeline_command_10",
+        "rate_register": 6,
+        "mask_register": 97,
+        "poll_arguments": [
+          "--register",
+          "0x3d",
+          "--poll-hz",
+          "100",
+          "--window",
+          "4",
+          "--write-mode",
+          "command"
+        ]
+      },
+      {
+        "changed_angle_pairs": 6,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 187,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 160,
+          "0x71": 131
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 62.98170799999969,
+          "p50_ms": 31.990333000000426,
+          "p95_ms": 61.556416999999364
+        },
+        "notification_hz": 23.40372407040778,
+        "notification_sizes": {
+          "20": 83,
+          "40": 104
+        },
+        "notifications": 187,
+        "pose_frames": 160,
+        "pose_notification_hz": 23.375,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 61,
+        "request_timeouts": 1,
+        "requests_including_warmup": 166,
+        "response_hz": 16.35744155458608,
+        "responses": 131,
+        "seconds": 8,
+        "start_unix_ns": "1789821178306090000",
+        "stream_frames": 160,
+        "stream_hz": 20.0,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "angles_pipeline_command_20",
+        "rate_register": 7,
+        "mask_register": 97,
+        "poll_arguments": [
+          "--register",
+          "0x3d",
+          "--poll-hz",
+          "100",
+          "--window",
+          "4",
+          "--write-mode",
+          "command"
+        ]
+      },
+      {
+        "changed_angle_pairs": 4,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 162,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x61": 79,
+          "0x71": 131
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 64.25162499999982,
+          "p50_ms": 58.8406250000002,
+          "p95_ms": 61.76458300000043
+        },
+        "notification_hz": 20.249252789145945,
+        "notification_sizes": {
+          "20": 114,
+          "40": 48
+        },
+        "notifications": 162,
+        "pose_frames": 79,
+        "pose_notification_hz": 20.25,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 81,
+        "request_timeouts": 0,
+        "requests_including_warmup": 166,
+        "response_hz": 16.350328339061946,
+        "responses": 131,
+        "seconds": 8,
+        "start_unix_ns": "1789821195226015000",
+        "stream_frames": 79,
+        "stream_hz": 9.875,
+        "timestamp_delta_ms_histogram": {},
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "quaternion_pipeline_command_10",
+        "rate_register": 6,
+        "mask_register": 97,
+        "poll_arguments": [
+          "--register",
+          "0x51",
+          "--poll-hz",
+          "100",
+          "--window",
+          "4",
+          "--write-mode",
+          "command"
+        ]
+      },
+      {
+        "changed_angle_pairs": 8,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x71": 132,
+          "0x81": 1592
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 64.08779200000004,
+          "p50_ms": 31.776457999999508,
+          "p95_ms": 61.88933299999988
+        },
+        "notification_hz": 24.910849614410314,
+        "notification_sizes": {
+          "128": 68,
+          "148": 130,
+          "168": 1
+        },
+        "notifications": 199,
+        "pose_frames": 1592,
+        "pose_notification_hz": 24.875,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 3,
+        "request_timeouts": 1,
+        "requests_including_warmup": 169,
+        "response_hz": 16.48142070448359,
+        "responses": 132,
+        "seconds": 8,
+        "start_unix_ns": "1789821212985986000",
+        "stream_frames": 1592,
+        "stream_hz": 199.0,
+        "timestamp_delta_ms_histogram": {
+          "5": 1591
+        },
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "timestamp_angles_read_rate_200",
+        "rate_register": 11,
+        "mask_register": 129,
+        "poll_arguments": [
+          "--register",
+          "0x03",
+          "--poll-hz",
+          "100",
+          "--window",
+          "4",
+          "--write-mode",
+          "command"
+        ]
+      },
+      {
+        "changed_angle_pairs": 12,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 199,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x71": 129,
+          "0x81": 1592
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 63.222957999999885,
+          "p50_ms": 31.821583000000153,
+          "p95_ms": 61.75620900000034
+        },
+        "notification_hz": 24.81519287102893,
+        "notification_sizes": {
+          "128": 70,
+          "148": 129
+        },
+        "notifications": 199,
+        "pose_frames": 1592,
+        "pose_notification_hz": 24.875,
+        "quaternion_norm_max": null,
+        "quaternion_norm_min": null,
+        "register": 81,
+        "request_timeouts": 1,
+        "requests_including_warmup": 165,
+        "response_hz": 16.163963795716988,
+        "responses": 129,
+        "seconds": 8,
+        "start_unix_ns": "1789821229905035000",
+        "stream_frames": 1592,
+        "stream_hz": 199.0,
+        "timestamp_delta_ms_histogram": {
+          "5": 1591
+        },
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "timestamp_angles_read_quaternion_200",
+        "rate_register": 11,
+        "mask_register": 129,
+        "poll_arguments": [
+          "--register",
+          "0x51",
+          "--poll-hz",
+          "100",
+          "--window",
+          "4",
+          "--write-mode",
+          "command"
+        ]
+      },
+      {
+        "changed_angle_pairs": 0,
+        "characteristics": [
+          {
+            "properties": "CharPropFlags(NOTIFY)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+          },
+          {
+            "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+            "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+            "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+          }
+        ],
+        "complete_pose_notifications": 198,
+        "discarded_bytes": 0,
+        "flags": {
+          "0x84": 1584
+        },
+        "invalid_quaternions": 0,
+        "invalid_timestamps": 0,
+        "notification_gaps": {
+          "max_ms": 90.21962500000002,
+          "p50_ms": 30.72895899999928,
+          "p95_ms": 61.6582499999998
+        },
+        "notification_hz": 24.875212508388024,
+        "notification_sizes": {
+          "144": 198
+        },
+        "notifications": 198,
+        "pose_frames": 1584,
+        "pose_notification_hz": 24.75,
+        "quaternion_norm_max": 0.999955194464151,
+        "quaternion_norm_min": 0.9999462370278291,
+        "register": null,
+        "request_timeouts": 0,
+        "requests_including_warmup": 0,
+        "response_hz": 0.0,
+        "responses": 0,
+        "seconds": 8,
+        "start_unix_ns": "1789821247424882000",
+        "stream_frames": 1584,
+        "stream_hz": 198.0,
+        "timestamp_delta_ms_histogram": {
+          "5": 1583
+        },
+        "warmup_seconds": 2,
+        "write_errors": [],
+        "label": "timestamp_quaternion200",
+        "rate_register": 11,
+        "mask_register": 132,
+        "poll_arguments": []
+      }
+    ],
+    "restored": true,
+    "final": {
+      "rate": 6,
+      "mask": 97
+    }
+  },
+  "usb_ble_differential": {
+    "original": {
+      "rate": 6,
+      "mask": 97
+    },
+    "restored": true,
+    "probe": {
+      "changed_angle_pairs": 0,
+      "characteristics": [
+        {
+          "properties": "CharPropFlags(NOTIFY)",
+          "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+          "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+        },
+        {
+          "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+          "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+          "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+        }
+      ],
+      "complete_pose_notifications": 199,
+      "discarded_bytes": 0,
+      "flags": {
+        "0x84": 1592
+      },
+      "invalid_quaternions": 0,
+      "invalid_timestamps": 0,
+      "notification_gaps": {
+        "max_ms": 91.54904199999959,
+        "p50_ms": 30.939084000000783,
+        "p95_ms": 61.70674999999992
+      },
+      "notification_hz": 24.815946700177328,
+      "notification_sizes": {
+        "144": 199
+      },
+      "notifications": 199,
+      "pose_frames": 1592,
+      "pose_notification_hz": 24.875,
+      "quaternion_norm_max": 0.999953401120574,
+      "quaternion_norm_min": 0.9999413976038396,
+      "register": null,
+      "request_timeouts": 0,
+      "requests_including_warmup": 0,
+      "response_hz": 0.0,
+      "responses": 0,
+      "seconds": 8,
+      "start_unix_ns": "1789821466667000000",
+      "stream_frames": 1592,
+      "stream_hz": 199.0,
+      "timestamp_delta_ms_histogram": {
+        "5": 1591
+      },
+      "warmup_seconds": 2,
+      "write_errors": [],
+      "label": "simultaneous_timestamp_quaternion200"
+    },
+    "usb_frames": 2034,
+    "usb_capture_errors": [],
+    "matched_frames": 1592,
+    "missing_usb_matches": 0,
+    "all_frames_ble_minus_usb_ms": {
+      "count": 1592,
+      "min_ms": -2.054209,
+      "p50_ms": 31.705229000000003,
+      "p95_ms": 56.325458,
+      "max_ms": 88.504833
+    },
+    "latest_frame_per_notification_ble_minus_usb_ms": {
+      "count": 199,
+      "min_ms": -2.054209,
+      "p50_ms": 13.72225,
+      "p95_ms": 27.321708,
+      "max_ms": 55.449833
+    },
+    "method": "Same 18-byte sensor frame incl. device timestamp and quaternion matched across simultaneous USB and BLE. Host SystemTime anchor for BLE; time.time_ns after UART read for USB; approximate receiver-time difference, not motion-to-audio latency.",
+    "final": {
+      "rate": 6,
+      "mask": 97
+    }
+  },
+  "timestamp_gyro_quaternion": {
+    "original": {
+      "rate": 6,
+      "mask": 97
+    },
+    "restored": true,
+    "probe": {
+      "changed_angle_pairs": 0,
+      "characteristics": [
+        {
+          "properties": "CharPropFlags(NOTIFY)",
+          "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+          "uuid": "0000ffe4-0000-1000-8000-00805f9a34fb"
+        },
+        {
+          "properties": "CharPropFlags(WRITE_WITHOUT_RESPONSE | WRITE)",
+          "service": "0000ffe5-0000-1000-8000-00805f9a34fb",
+          "uuid": "0000ffe9-0000-1000-8000-00805f9a34fb"
+        }
+      ],
+      "complete_pose_notifications": 198,
+      "discarded_bytes": 0,
+      "flags": {
+        "0xa4": 1584
+      },
+      "invalid_quaternions": 0,
+      "invalid_timestamps": 0,
+      "notification_gaps": {
+        "max_ms": 63.50483299999965,
+        "p50_ms": 31.078667000000948,
+        "p95_ms": 61.49275000000021
+      },
+      "notification_hz": 24.86094826786864,
+      "notification_sizes": {
+        "192": 198
+      },
+      "notifications": 198,
+      "pose_frames": 1584,
+      "pose_notification_hz": 24.75,
+      "quaternion_norm_max": 0.999953401120574,
+      "quaternion_norm_min": 0.999940768924062,
+      "register": null,
+      "request_timeouts": 0,
+      "requests_including_warmup": 0,
+      "response_hz": 0.0,
+      "responses": 0,
+      "seconds": 8,
+      "start_unix_ns": "1789821605808606000",
+      "stream_frames": 1584,
+      "stream_hz": 198.0,
+      "timestamp_delta_ms_histogram": {
+        "5": 1583
+      },
+      "warmup_seconds": 2,
+      "write_errors": [],
+      "label": "timestamp_gyro_quaternion200"
+    },
+    "final": {
+      "rate": 6,
+      "mask": 97
+    }
+  },
+  "raw_trace_manifest": {
+    "timestamp_angles200.ndjson": {
+      "bytes": 69285,
+      "sha256": "59959a7a7cb420c55734a0e197dc4be6acfa5b9733e0179da5b75ea473d81aaf"
+    },
+    "timestamp_angles_read_quaternion_200.ndjson": {
+      "bytes": 75713,
+      "sha256": "bf66ae65a904dbb8fb0faf7a4071ef17a1fd6c38fb0cd406ad6374ebb20d3b98"
+    },
+    "angles_pipeline_command_20.ndjson": {
+      "bytes": 20553,
+      "sha256": "4a17d77110abf6c4535394bc2d8f5916716c04ad6b556096b5faa1093f2f866b"
+    },
+    "timestamp_quaternion200.ndjson": {
+      "bytes": 76968,
+      "sha256": "e096097c875ec2d1ab36467bd971af8a9f339232e4de2406fb0be361617f9e40"
+    },
+    "usb-reference.ndjson": {
+      "bytes": 162720,
+      "sha256": "d75873c6a9803f28c7924a2655f71e08c93705f08ed78bd770c1f3053ca0b28f"
+    },
+    "default200.ndjson": {
+      "bytes": 85395,
+      "sha256": "4067ca5f3862a3a850fe8e3d6876a30a10765288a2ecdb3be13aa11d512666b3"
+    },
+    "angles_pipeline_command_10.ndjson": {
+      "bytes": 15677,
+      "sha256": "619523abf9c395edca4391fa0d4dbc82771c337dca5672127e923e6e991d8b69"
+    },
+    "simultaneous_timestamp_quaternion200.ndjson": {
+      "bytes": 77170,
+      "sha256": "9b336ede1080869cb332ab8e5b41d19fec18b3eb8925acb54629022d61efe26a"
+    },
+    "default20.ndjson": {
+      "bytes": 13215,
+      "sha256": "e675ebff1ad4f0ee8015dc8e6b35ea598dadf42d58814a0216fc3e7b2da0d3ee"
+    },
+    "quaternion_pipeline_command_10.ndjson": {
+      "bytes": 15800,
+      "sha256": "51cba91f8e11b712613b09480aeae9425c493a3885c51319281422916f0b3166"
+    },
+    "timestamp_motion200.ndjson": {
+      "bytes": 104442,
+      "sha256": "a2e6e3f6bd6d5a37b5a3f3b69901c258bab9219a3790a12a8e9336dfc68b46b7"
+    },
+    "timestamp_gyro_quaternion200.ndjson": {
+      "bytes": 101130,
+      "sha256": "0ac430b5c3d03f2826aabbe7530925527f9068954305a0878eb54464047e231e"
+    },
+    "angles_single_response_10.ndjson": {
+      "bytes": 15467,
+      "sha256": "c68d383c87215c205af2d66a68281c48bff2917de96ebb42bdc26ab9798dd69d"
+    },
+    "quaternion200.ndjson": {
+      "bytes": 45785,
+      "sha256": "3c6914a8fe2660890b5bff3afc53a040816e5cef67f7ed7c2277551f933a02a8"
+    },
+    "default100.ndjson": {
+      "bytes": 45786,
+      "sha256": "ea87f7606befb0229258978644cc4680db6c96ca76a322c2a9dc75fd3aedacdf"
+    },
+    "timestamp_angles_read_rate_200.ndjson": {
+      "bytes": 76159,
+      "sha256": "bc69dd42a0e7740ba4101bf025991b4144069e466a1384ca2b1508affed20b3e"
+    },
+    "angles200.ndjson": {
+      "bytes": 37923,
+      "sha256": "ff2894254190407e015ed60bbef713026b61bd6d1a8a8cd7b764b1e72e888412"
+    },
+    "probe-initial.ndjson": {
+      "bytes": 2643,
+      "sha256": "42f1f8c79172d7c16f1a2c5772b139e7d657334952ae852c258fb827ab3ec3d6"
+    }
+  },
+  "notes": [
+    "Raw traces retained locally under target/benchmarks/ble-exploration; table results do not claim that every stationary sample has distinct angles.",
+    "The first format-sweep stream_hz field uses first/last host receive times and is biased upward for batched frames; prefer stream_hz_window. Later probe runs use fixed measurement-window counts.",
+    "0xe1 long-payload run is explicitly excluded as unreliable.",
+    "No flash save, calibration or undocumented register writes were sent. The runtime source/protocol of the production bridge is unchanged."
+  ]
+}

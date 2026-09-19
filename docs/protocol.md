@@ -23,6 +23,10 @@
 串口命令异步写入驱动队列，不在采集线程调用可能阻塞的 `tcdrain`／`FlushFileBuffers`；配置核验以寄存器响应为准。
 默认连续角度模式不发送读取或配置命令。
 
+后续实验确认新版协议可通过 `0x0E` 选择原生四元数、设备时间戳等可变长度输出；
+见 [macOS BLE 探索](measurements/2026-09-19-ble-exploration.md)。该能力目前仅由独立实验工具验证，
+正式桥接和 C ABI 尚未实现新格式解析，仍要求上述默认 `55 61` 或寄存器响应格式。
+
 显式配置先发送 `FF AA 69 88 B5` 解锁，等待 100 ms，再写寄存器并读回。
 速率寄存器为 `0x03`，10／50／100／200 Hz 分别为 `0x06`／`0x08`／`0x09`／`0x0B`。
 速率表依据[官方 REG.h](https://github.com/WITMOTION/WitStandardProtocol_JY901/blob/main/Arduino/Arduino_sdk/REG.h)，

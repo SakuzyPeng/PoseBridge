@@ -848,10 +848,14 @@ dependencies = [
 name = "posebridge-cli"
 version = "0.1.0"
 dependencies = [
+ "btleplug",
  "clap",
  "ctrlc",
+ "futures-util",
  "posebridge-core",
  "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

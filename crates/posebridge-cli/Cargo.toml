@@ -16,3 +16,9 @@ posebridge-core.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 ctrlc = "3.4"
+
+[dev-dependencies]
+btleplug.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+uuid.workspace = true
