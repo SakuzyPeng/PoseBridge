@@ -146,6 +146,7 @@ fn controller_snapshot_stale_recovery_and_lifecycle() {
             pattern: Pattern::Fixed,
             euler_deg: [30., 20., 10.],
             rate_hz: 1,
+            sample_clock: false,
         },
         ..Config::default()
     })
@@ -185,11 +186,13 @@ fn osc_loopback_types_values_and_rate_limit() {
             pattern: Pattern::Fixed,
             euler_deg: [30., 20., 10.],
             rate_hz: 200,
+            sample_clock: false,
         },
         osc: Some(OscConfig {
             target: socket.local_addr().unwrap(),
             max_rate_hz: 50,
             format: OscFormat::Euler,
+            version: OscVersion::V1,
         }),
         ..Config::default()
     })
@@ -235,11 +238,13 @@ fn no_duplicate_or_stale_osc_pose() {
             pattern: Pattern::Fixed,
             euler_deg: [0.; 3],
             rate_hz: 1,
+            sample_clock: false,
         },
         osc: Some(OscConfig {
             target: socket.local_addr().unwrap(),
             max_rate_hz: 100,
             format: OscFormat::Quaternion,
+            version: OscVersion::V1,
         }),
         ..Config::default()
     })
@@ -260,6 +265,7 @@ fn configuration_validation_preserves_previous_config() {
             target: "192.0.2.1:9000".parse().unwrap(),
             max_rate_hz: 100,
             format: OscFormat::Quaternion,
+            version: OscVersion::V1,
         }),
         ..Config::default()
     };

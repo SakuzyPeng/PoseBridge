@@ -28,10 +28,19 @@ def decode(data):
     expected = {
         "/posebridge/v1/quaternion": ",ffff",
         "/posebridge/v1/euler": ",fff",
+        "/posebridge/v2/quaternion": ",hhhhihffff",
+        "/posebridge/v2/euler": ",hhhhihfff",
     }
     if address not in expected or tags != expected[address]:
         raise ValueError("unexpected OSC address/types")
-    values = struct.unpack(">" + "f" * (len(tags) - 1), data[offset:])
+    values = struct.unpack(">" + tags[1:].replace("h", "q"), data[offset:])
+    if address.startswith("/posebridge/v2/"):
+        session, sequence, received, sample, kind, epoch = values[:6]
+        if session <= 0 or sequence <= 0 or min(received, sample, epoch) < 0 or kind not in (0, 1, 2):
+            raise ValueError("invalid source timing metadata")
+        if (kind == 0 and (sample != 0 or epoch != 0)) or (kind != 0 and epoch == 0):
+            raise ValueError("inconsistent sample clock")
+        values = values[6:]
     if not all(math.isfinite(value) for value in values):
         raise ValueError("non-finite pose")
     if len(values) == 4 and abs(sum(value * value for value in values) - 1) > 1e-5:

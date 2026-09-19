@@ -9,7 +9,7 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 
 - BLE 无线与 USB 串口采集，共用数据解析和姿态转换。
 - 设备扫描、实时诊断、显式参数配置与断线重连。
-- 四元数／欧拉角 OSC 输出，以及无设备模拟器。
+- 四元数／欧拉角 OSC 输出、设备时间戳（OSC v2），以及无设备模拟器。
 - Rust 核心库、CLI、实验性 C ABI。
 
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
@@ -33,6 +33,7 @@ Windows 可执行文件为 `target/release/posebridge.exe`。
 
 - [完整使用指南](docs/usage.md)：构建、BLE／USB、安装映射、OSC 和设备配置。
 - [协议与坐标](docs/protocol.md)：输入帧、旋转约定、OSC 消息与数据时效。
+- [时间戳与 OSC v2](docs/timestamps.md)：显式启用、时钟代次和跨进程时间边界。
 - [C ABI](docs/c-api.md)：生命周期、配置和快照轮询。
 - [验证记录](docs/validation.md)：已执行检查、实机结果和待验证项。
 

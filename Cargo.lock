@@ -837,7 +837,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "posebridge-capi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cbindgen",
  "posebridge-core",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "btleplug",
  "clap",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "btleplug",
  "futures-util",
@@ -1313,6 +1313,7 @@ version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
+ "getrandom",
  "js-sys",
  "wasm-bindgen",
 ]

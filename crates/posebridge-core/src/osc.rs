@@ -1,4 +1,4 @@
-use crate::{Error, OscConfig, OscFormat, PoseSnapshot, Result};
+use crate::{Error, OscConfig, OscFormat, OscVersion, PoseSnapshot, Result};
 use rosc::{OscMessage, OscPacket, OscType};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -7,21 +7,55 @@ pub const QUATERNION_ADDRESS: &str = "/posebridge/v1/quaternion";
 pub const EULER_ADDRESS: &str = "/posebridge/v1/euler";
 
 pub fn encode(pose: &PoseSnapshot, format: OscFormat) -> Result<Vec<u8>> {
-    let (address, values) = match format {
-        OscFormat::Quaternion => (QUATERNION_ADDRESS, pose.quaternion_xyzw.to_vec()),
-        OscFormat::Euler => (EULER_ADDRESS, pose.euler_deg.to_vec()),
+    encode_versioned(pose, format, OscVersion::V1)
+}
+
+pub fn encode_versioned(
+    pose: &PoseSnapshot,
+    format: OscFormat,
+    version: OscVersion,
+) -> Result<Vec<u8>> {
+    let (address, values) = match (version, format) {
+        (OscVersion::V1, OscFormat::Quaternion) => {
+            (QUATERNION_ADDRESS, pose.quaternion_xyzw.to_vec())
+        }
+        (OscVersion::V1, OscFormat::Euler) => (EULER_ADDRESS, pose.euler_deg.to_vec()),
+        (OscVersion::V2, OscFormat::Quaternion) => {
+            ("/posebridge/v2/quaternion", pose.quaternion_xyzw.to_vec())
+        }
+        (OscVersion::V2, OscFormat::Euler) => ("/posebridge/v2/euler", pose.euler_deg.to_vec()),
     };
-    let args = values
-        .into_iter()
-        .map(|v| {
-            let v = v as f32;
-            if v.is_finite() {
-                Ok(OscType::Float(v))
-            } else {
-                Err(Error::Invalid("OSC value is not a finite float32".into()))
-            }
-        })
-        .collect::<Result<_>>()?;
+    let mut args = Vec::new();
+    if version == OscVersion::V2 {
+        let long = |value| {
+            i64::try_from(value)
+                .map(OscType::Long)
+                .map_err(|_| Error::Invalid("OSC metadata exceeds signed int64".into()))
+        };
+        if pose.session_id == 0
+            || pose.sequence == 0
+            || pose.sample_time.is_some_and(|t| t.clock_epoch == 0)
+        {
+            return Err(Error::Invalid(
+                "OSC v2 requires positive session, sequence and present clock epoch".into(),
+            ));
+        }
+        args.extend([
+            long(pose.session_id)?,
+            long(pose.sequence)?,
+            long(pose.received_ns)?,
+            long(pose.sample_time.map_or(0, |t| t.time_ms))?,
+            OscType::Int(pose.sample_time.map_or(0, |t| t.kind as i32)),
+            long(pose.sample_time.map_or(0, |t| t.clock_epoch))?,
+        ]);
+    }
+    for value in values {
+        let value = value as f32;
+        if !value.is_finite() {
+            return Err(Error::Invalid("OSC value is not a finite float32".into()));
+        }
+        args.push(OscType::Float(value));
+    }
     rosc::encoder::encode(&OscPacket::Message(OscMessage {
         addr: address.into(),
         args,
@@ -78,7 +112,7 @@ impl Sender {
             self.pending_deadline = Some(deadline);
             return Ok(false);
         }
-        let packet = encode(pose, self.config.format)?;
+        let packet = encode_versioned(pose, self.config.format, self.config.version)?;
         match self.socket.send(&packet) {
             Ok(n) if n == packet.len() => {
                 self.last_key = Some(key);
@@ -125,12 +159,14 @@ mod tests {
             target: receiver.local_addr().unwrap(),
             max_rate_hz: rate,
             format: OscFormat::Euler,
+            version: OscVersion::V1,
         })
         .unwrap();
         let pose = PoseSnapshot {
             session_id: 1,
             sequence: 1,
             received_ns: 0,
+            sample_time: None,
             quaternion_xyzw: [0., 0., 0., 1.],
             euler_deg: [0.; 3],
             raw: RawData::default(),

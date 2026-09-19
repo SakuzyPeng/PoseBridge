@@ -7,7 +7,7 @@ PoseBridge 不实现自己的惯性融合算法，不代表维特设备厂商，
 硬件无关模拟器和显式设备配置。首批目标为 macOS Apple Silicon、Windows x64。
 
 macOS 与 Windows 的 BLE 角度通知、四元数寄存器读取和 USB 串口已经用实物验证；详细状态见
-[验证记录](validation.md)。MacinRender OSC 接收端尚需单独实现；成功发送 OSC 不等于音频软件已消费。
+[验证记录](validation.md)。MacinRender 已提供原生 OSC 接收接口，GUI 尚未接入；成功发送 OSC 不等于音频软件已消费。
 
 ## 构建
 
@@ -52,7 +52,7 @@ USB 接线后运行：
 
 端口路径以枚举结果为准，Windows 使用 `--port COM3` 等实际端口名。默认 115200、8N1、无流控。
 枚举仅显示被系统识别为 USB 的串口；驱动没有提供 USB 元数据时，可以显式指定已知端口。
-此型号 USB 实测使用与 BLE 相同的 **20 字节协议**，不使用其他 WIT 型号的 11 字节帧。
+此型号 USB 实测使用与 BLE 相同的协议（默认帧为 **20 字节**，已支持带时间戳的可变长度格式），不使用其他 WIT 型号的 11 字节帧。
 
 诊断输出含原始 XYZ 角度、转换后 yaw/pitch/roll、实际姿态率及连接状态。
 未指定安装映射时，诊断使用传感器 XYZ 的单位基底并明确提示；这不是已校准的头部朝向。
@@ -119,6 +119,14 @@ python3 scripts/measure_osc.py -- bridge --transport usb --port /dev/cu.usbseria
 测量脚本验证地址、类型、有限数值和四元数范数，丢弃开始 3 秒，报告接收间隔分位数；不会改变设备速率。
 高频输出四元数默认由连续角度流本地转换得到，不要求选择原生四元数寄存器输入。
 
+## 设备时间戳与原生四元数
+
+使用 `configure ... output --format timestamp-quaternion` 显式启用时间戳＋原生四元数，随后
+`bridge ... --pose-input stream-quaternion --osc-version v2` 转发。普通桥接不修改该配置。
+可选 `timestamp-euler` 和 `timestamp-gyro-quaternion`，操作与恢复示例见[时间戳指南](timestamps.md)。
+设备日历、源主机接收时间和接收器时间分别上报，不自动同步或作延迟补偿。
+旧 `--pose-input quaternion` 是寄存器轮询；高频原生通知用 `stream-quaternion`。
+
 ## 无设备模拟
 
 ```sh
@@ -128,6 +136,7 @@ python3 scripts/measure_osc.py -- bridge --transport usb --port /dev/cu.usbseria
 
 轨迹支持 `fixed`、`yaw`、`combined`、`wrap`，`--sample-rate-hz` 控制模拟新采样率。
 模拟器的坐标已是输出姿态约定，不再应用设备安装映射。
+加 `--osc-version v2 --sample-clock` 可测试 kind=2 的合成经过时间；默认不生成采样时间。
 
 ## 显式设备配置
 

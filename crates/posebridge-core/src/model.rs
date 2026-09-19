@@ -48,6 +48,8 @@ pub enum PoseInput {
     #[default]
     Euler,
     Quaternion,
+    /// Native notification quaternion, without register polling.
+    StreamQuaternion,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +89,9 @@ pub enum Source {
         euler_deg: [f64; 3],
         #[serde(default = "default_rate")]
         rate_hz: u32,
+        /// Synthetic elapsed clock, never a device timestamp.
+        #[serde(default)]
+        sample_clock: bool,
     },
 }
 
@@ -102,6 +107,14 @@ pub enum OscFormat {
     Euler,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OscVersion {
+    #[default]
+    V1,
+    V2,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OscConfig {
@@ -110,6 +123,8 @@ pub struct OscConfig {
     pub max_rate_hz: u32,
     #[serde(default)]
     pub format: OscFormat,
+    #[serde(default)]
+    pub version: OscVersion,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +147,7 @@ impl Default for Config {
                 pattern: Pattern::Fixed,
                 euler_deg: [0.0; 3],
                 rate_hz: 100,
+                sample_clock: false,
             },
             pose_input: PoseInput::Euler,
             mounting: None,
@@ -176,7 +192,7 @@ impl Config {
             validate_rate(osc.max_rate_hz)?;
             if !osc.target.ip().is_loopback() || osc.target.port() == 0 {
                 return Err(Error::Invalid(
-                    "OSC v1 target must be a nonzero loopback port".into(),
+                    "OSC target must be a nonzero loopback port".into(),
                 ));
             }
         }
@@ -228,11 +244,30 @@ pub struct RawData {
     pub quaternion_received_ns: Option<u64>,
 }
 
+/// Calendar time is in the unsynchronized device clock, not UTC.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[repr(u32)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleTimeKind {
+    DeviceCalendar = 1,
+    SimulatedElapsed = 2,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub struct SampleTime {
+    pub kind: SampleTimeKind,
+    pub time_ms: u64,
+    /// Starts at 1 per connection; increments on clock discontinuities.
+    pub clock_epoch: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PoseSnapshot {
     pub session_id: u64,
     pub sequence: u64,
     pub received_ns: u64,
+    /// Belongs only to this pose frame; absent on untimestamped/register data.
+    pub sample_time: Option<SampleTime>,
     pub quaternion_xyzw: [f64; 4],
     pub euler_deg: [f64; 3],
     pub raw: RawData,
@@ -267,6 +302,9 @@ pub struct StatusSnapshot {
     pub frames_received: u64,
     pub discarded_bytes: u64,
     pub invalid_poses: u64,
+    pub invalid_frames: u64,
+    pub duplicate_sample_times: u64,
+    pub clock_discontinuities: u64,
     pub pose_count: u64,
     pub osc_sent: u64,
     pub reconnect_count: u64,
@@ -283,8 +321,20 @@ pub struct StatusSnapshot {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeviceCommand {
     Rate { hz: u32 },
+    Output { format: OutputProfile },
     AccelCalibrate,
     MagStart,
     MagStop,
     Save,
+}
+
+/// Verified, bounded new-firmware stream profiles. No implicit save to flash.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u16)]
+pub enum OutputProfile {
+    Motion = 0x61,
+    TimestampEuler = 0x81,
+    TimestampQuaternion = 0x84,
+    TimestampGyroQuaternion = 0xa4,
 }

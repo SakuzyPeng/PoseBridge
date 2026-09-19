@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define PB_ABI_VERSION 100
+#define PB_ABI_VERSION 200
 
 #define PB_OK 0
 
@@ -54,7 +54,7 @@ typedef struct PbPose {
   float quaternion_xyzw[4];
   float euler_yaw_pitch_roll_deg[3];
   /**
-   * bit 0: motion fields present; bit 1: raw quaternion present.
+   * bit 0: complete motion group; bit 1: quaternion; bits 2/3/4: Euler/accel/gyro present.
    */
   uint32_t raw_flags;
   float raw_euler_xyz_deg[3];
@@ -64,6 +64,21 @@ typedef struct PbPose {
   uint64_t motion_received_ns;
   uint64_t quaternion_received_ns;
 } PbPose;
+
+/**
+ * Experimental additive snapshot. Initialize only the outer struct_size.
+ * pose.received_ns is host monotonic time; sample_time_ms uses its own clock.
+ * kind 0: absent (time/epoch=0); 1: device calendar since 2000-01-01, NOT UTC;
+ * 2: synthetic elapsed time. Present clocks have nonzero epoch; compare within
+ * the same pose.session_id, kind and epoch only. Never subtract different clocks.
+ */
+typedef struct PbPoseV2 {
+  uint32_t struct_size;
+  uint32_t sample_time_kind;
+  struct PbPose pose;
+  uint64_t sample_time_ms;
+  uint64_t sample_clock_epoch;
+} PbPoseV2;
 
 /**
  * Initialize struct_size to sizeof(PbStatus). State values are documented in docs/c-api.md.
@@ -138,6 +153,14 @@ int32_t pb_scan_start(struct PbContext *value, uint32_t transport, uint32_t seco
  * value is live, data references len readable bytes, and control calls are serialized.
  */
 int32_t pb_device_command(struct PbContext *value, const char *data, uint32_t len);
+
+/**
+ * Copy pose and sample time atomically from one acquisition snapshot.
+ * PB_NO_DATA before the first valid pose; undersized outputs are unchanged.
+ * # Safety
+ * value is live; out is aligned writable PbPoseV2 storage with struct_size initialized.
+ */
+int32_t pb_latest_pose_v2(const struct PbContext *value, struct PbPoseV2 *out);
 
 /**
  * Copy the latest snapshot without waiting for new data. PB_NO_DATA before first pose.

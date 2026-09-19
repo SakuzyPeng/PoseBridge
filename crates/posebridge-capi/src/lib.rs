@@ -2,13 +2,13 @@
 //! All non-null caller pointers must be live, aligned, and valid for their supplied lengths.
 //! Lifecycle/configuration calls are externally serialized; destroy must not race any access.
 
-use posebridge_core::{Config, Controller, DeviceCommand, Error, TransportKind};
+use posebridge_core::{Config, Controller, DeviceCommand, Error, PoseSnapshot, TransportKind};
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 
-pub const PB_ABI_VERSION: u32 = 100;
+pub const PB_ABI_VERSION: u32 = 200;
 pub const PB_OK: i32 = 0;
 pub const PB_INVALID_ARGUMENT: i32 = 1;
 pub const PB_NO_DATA: i32 = 2;
@@ -41,7 +41,7 @@ pub struct PbPose {
     pub received_ns: u64,
     pub quaternion_xyzw: [f32; 4],
     pub euler_yaw_pitch_roll_deg: [f32; 3],
-    /// bit 0: motion fields present; bit 1: raw quaternion present.
+    /// bit 0: complete motion group; bit 1: quaternion; bits 2/3/4: Euler/accel/gyro present.
     pub raw_flags: u32,
     pub raw_euler_xyz_deg: [f32; 3],
     pub acceleration_g: [f32; 3],
@@ -49,6 +49,21 @@ pub struct PbPose {
     pub raw_quaternion_wxyz: [f32; 4],
     pub motion_received_ns: u64,
     pub quaternion_received_ns: u64,
+}
+
+/// Experimental additive snapshot. Initialize only the outer struct_size.
+/// pose.received_ns is host monotonic time; sample_time_ms uses its own clock.
+/// kind 0: absent (time/epoch=0); 1: device calendar since 2000-01-01, NOT UTC;
+/// 2: synthetic elapsed time. Present clocks have nonzero epoch; compare within
+/// the same pose.session_id, kind and epoch only. Never subtract different clocks.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PbPoseV2 {
+    pub struct_size: u32,
+    pub sample_time_kind: u32,
+    pub pose: PbPose,
+    pub sample_time_ms: u64,
+    pub sample_clock_epoch: u64,
 }
 
 /// Initialize struct_size to sizeof(PbStatus). State values are documented in docs/c-api.md.
@@ -270,6 +285,68 @@ pub unsafe extern "C" fn pb_device_command(
     })
 }
 
+fn pose_to_c(p: &PoseSnapshot) -> PbPose {
+    let raw_flags = u32::from(
+        p.raw.euler_xyz_deg.is_some()
+            && p.raw.acceleration_g.is_some()
+            && p.raw.angular_velocity_dps.is_some(),
+    ) | (u32::from(p.raw.quaternion_wxyz.is_some()) << 1)
+        | (u32::from(p.raw.euler_xyz_deg.is_some()) << 2)
+        | (u32::from(p.raw.acceleration_g.is_some()) << 3)
+        | (u32::from(p.raw.angular_velocity_dps.is_some()) << 4);
+    PbPose {
+        struct_size: std::mem::size_of::<PbPose>() as u32,
+        fresh: u32::from(p.fresh),
+        session_id: p.session_id,
+        sequence: p.sequence,
+        received_ns: p.received_ns,
+        quaternion_xyzw: p.quaternion_xyzw.map(|v| v as f32),
+        euler_yaw_pitch_roll_deg: p.euler_deg.map(|v| v as f32),
+        raw_flags,
+        raw_euler_xyz_deg: p.raw.euler_xyz_deg.unwrap_or_default().map(|v| v as f32),
+        acceleration_g: p.raw.acceleration_g.unwrap_or_default().map(|v| v as f32),
+        angular_velocity_dps: p
+            .raw
+            .angular_velocity_dps
+            .unwrap_or_default()
+            .map(|v| v as f32),
+        raw_quaternion_wxyz: p.raw.quaternion_wxyz.unwrap_or_default().map(|v| v as f32),
+        motion_received_ns: p.raw.motion_received_ns.unwrap_or_default(),
+        quaternion_received_ns: p.raw.quaternion_received_ns.unwrap_or_default(),
+    }
+}
+
+/// Copy pose and sample time atomically from one acquisition snapshot.
+/// PB_NO_DATA before the first valid pose; undersized outputs are unchanged.
+/// # Safety
+/// value is live; out is aligned writable PbPoseV2 storage with struct_size initialized.
+#[no_mangle]
+pub unsafe extern "C" fn pb_latest_pose_v2(value: *const PbContext, out: *mut PbPoseV2) -> i32 {
+    boundary(value, || {
+        let ctx = context(value)?;
+        if out.is_null() {
+            return Err(Failure(PB_INVALID_ARGUMENT, "out is NULL".into()));
+        }
+        if (*out).struct_size < std::mem::size_of::<PbPoseV2>() as u32 {
+            return Err(Failure(
+                PB_BUFFER_TOO_SMALL,
+                "PbPoseV2 struct_size too small".into(),
+            ));
+        }
+        let p = lock(&ctx.controller)
+            .latest_pose()
+            .ok_or_else(|| Failure(PB_NO_DATA, "no pose received yet".into()))?;
+        *out = PbPoseV2 {
+            struct_size: std::mem::size_of::<PbPoseV2>() as u32,
+            sample_time_kind: p.sample_time.map_or(0, |t| t.kind as u32),
+            pose: pose_to_c(&p),
+            sample_time_ms: p.sample_time.map_or(0, |t| t.time_ms),
+            sample_clock_epoch: p.sample_time.map_or(0, |t| t.clock_epoch),
+        };
+        Ok(())
+    })
+}
+
 /// Copy the latest snapshot without waiting for new data. PB_NO_DATA before first pose.
 /// # Safety
 /// value is live and out is aligned writable PbPose storage with struct_size initialized.
@@ -289,28 +366,7 @@ pub unsafe extern "C" fn pb_latest_pose(value: *const PbContext, out: *mut PbPos
         let p = lock(&ctx.controller)
             .latest_pose()
             .ok_or_else(|| Failure(PB_NO_DATA, "no pose received yet".into()))?;
-        let raw_flags = u32::from(p.raw.euler_xyz_deg.is_some())
-            | (u32::from(p.raw.quaternion_wxyz.is_some()) << 1);
-        *out = PbPose {
-            struct_size: std::mem::size_of::<PbPose>() as u32,
-            fresh: u32::from(p.fresh),
-            session_id: p.session_id,
-            sequence: p.sequence,
-            received_ns: p.received_ns,
-            quaternion_xyzw: p.quaternion_xyzw.map(|v| v as f32),
-            euler_yaw_pitch_roll_deg: p.euler_deg.map(|v| v as f32),
-            raw_flags,
-            raw_euler_xyz_deg: p.raw.euler_xyz_deg.unwrap_or_default().map(|v| v as f32),
-            acceleration_g: p.raw.acceleration_g.unwrap_or_default().map(|v| v as f32),
-            angular_velocity_dps: p
-                .raw
-                .angular_velocity_dps
-                .unwrap_or_default()
-                .map(|v| v as f32),
-            raw_quaternion_wxyz: p.raw.quaternion_wxyz.unwrap_or_default().map(|v| v as f32),
-            motion_received_ns: p.raw.motion_received_ns.unwrap_or_default(),
-            quaternion_received_ns: p.raw.quaternion_received_ns.unwrap_or_default(),
-        };
+        *out = pose_to_c(&p);
         Ok(())
     })
 }

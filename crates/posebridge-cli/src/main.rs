@@ -1,7 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use posebridge_core::{
     BleConnectionMode, Config, ConnectionState, Controller, DeviceCommand, Error, OscConfig,
-    OscFormat, Pattern, PoseInput, Result, Source, TransportKind, pose::Mounting,
+    OscFormat, OscVersion, OutputProfile, Pattern, PoseInput, Result, Source, TransportKind,
+    pose::Mounting,
 };
 use std::net::SocketAddr;
 use std::sync::{
@@ -38,6 +39,7 @@ impl From<Transport> for TransportKind {
 enum Input {
     Euler,
     Quaternion,
+    StreamQuaternion,
 }
 #[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum BleMode {
@@ -48,6 +50,18 @@ enum BleMode {
 enum Format {
     Quaternion,
     Euler,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum Version {
+    V1,
+    V2,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum Profile {
+    Motion,
+    TimestampEuler,
+    TimestampQuaternion,
+    TimestampGyroQuaternion,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Trajectory {
@@ -124,6 +138,7 @@ impl InputArgs {
             pose_input: match self.pose_input {
                 Input::Euler => PoseInput::Euler,
                 Input::Quaternion => PoseInput::Quaternion,
+                Input::StreamQuaternion => PoseInput::StreamQuaternion,
             },
             osc: None,
         })
@@ -139,12 +154,19 @@ struct OutputArgs {
     osc_rate_hz: u32,
     #[arg(long, value_enum, default_value = "quaternion")]
     format: Format,
+    /// v2 carries source/session timing; v1 retains the original pose-only contract.
+    #[arg(long, value_enum, default_value = "v1")]
+    osc_version: Version,
 }
 impl From<OutputArgs> for OscConfig {
     fn from(v: OutputArgs) -> Self {
         Self {
             target: v.osc_target,
             max_rate_hz: v.osc_rate_hz,
+            version: match v.osc_version {
+                Version::V1 => OscVersion::V1,
+                Version::V2 => OscVersion::V2,
+            },
             format: match v.format {
                 Format::Quaternion => OscFormat::Quaternion,
                 Format::Euler => OscFormat::Euler,
@@ -158,6 +180,11 @@ enum ConfigureAction {
     Rate {
         #[arg(long)]
         hz: u32,
+    },
+    /// Select a verified new-firmware stream profile (register 0x0E); read back, no save.
+    Output {
+        #[arg(long, value_enum)]
+        format: Profile,
     },
     AccelCalibrate,
     MagStart,
@@ -208,6 +235,9 @@ enum Command {
         pattern: Trajectory,
         #[arg(long, default_value_t = 100)]
         sample_rate_hz: u32,
+        /// Include explicitly synthetic elapsed sample time (use with --osc-version v2).
+        #[arg(long)]
+        sample_clock: bool,
         #[command(flatten)]
         output: OutputArgs,
         #[arg(long, default_value_t = 0.0)]
@@ -274,7 +304,7 @@ fn stream(
                 let angles = pose.as_ref().map(|p| p.euler_deg);
                 let raw = pose.as_ref().and_then(|p| p.raw.euler_xyz_deg);
                 println!(
-                    "{:?} session={} samples={} rate={:.2}Hz osc={} yaw/pitch/roll={:?} raw XYZ={:?}{}",
+                    "{:?} session={} samples={} rate={:.2}Hz osc={} yaw/pitch/roll={:?} raw XYZ={:?} sample_time={:?}{}",
                     status.state,
                     status.session_id,
                     status.pose_count,
@@ -282,6 +312,7 @@ fn stream(
                     status.osc_sent,
                     angles,
                     raw,
+                    pose.as_ref().and_then(|p| p.sample_time),
                     status
                         .last_error
                         .as_ref()
@@ -381,6 +412,7 @@ fn run() -> Result<()> {
             roll,
             pattern,
             sample_rate_hz,
+            sample_clock,
             output,
             duration,
             json,
@@ -395,6 +427,7 @@ fn run() -> Result<()> {
                     },
                     euler_deg: [yaw, pitch, roll],
                     rate_hz: sample_rate_hz,
+                    sample_clock,
                 },
                 osc: Some(output.into()),
                 ..Config::default()
@@ -404,6 +437,14 @@ fn run() -> Result<()> {
         Command::Configure { input, action } => {
             let command = match action {
                 ConfigureAction::Rate { hz } => DeviceCommand::Rate { hz },
+                ConfigureAction::Output { format } => DeviceCommand::Output {
+                    format: match format {
+                        Profile::Motion => OutputProfile::Motion,
+                        Profile::TimestampEuler => OutputProfile::TimestampEuler,
+                        Profile::TimestampQuaternion => OutputProfile::TimestampQuaternion,
+                        Profile::TimestampGyroQuaternion => OutputProfile::TimestampGyroQuaternion,
+                    },
+                },
                 ConfigureAction::AccelCalibrate => DeviceCommand::AccelCalibrate,
                 ConfigureAction::MagStart => DeviceCommand::MagStart,
                 ConfigureAction::MagStop => DeviceCommand::MagStop,

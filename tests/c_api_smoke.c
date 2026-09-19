@@ -18,6 +18,8 @@ static void wait_ms(unsigned ms) {
 
 int main(void) {
     assert(pb_abi_version() == PB_ABI_VERSION);
+    assert(sizeof(PbPose) == 136 && sizeof(PbPoseV2) == 160 && sizeof(PbStatus) == 96);
+    assert(offsetof(PbPoseV2, pose) == 8 && offsetof(PbPoseV2, sample_time_ms) == 144);
     assert(offsetof(PbPose, struct_size) == 0);
     assert(offsetof(PbPose, session_id) == 8);
     assert(pb_context_create(NULL) == PB_INVALID_ARGUMENT);
@@ -25,6 +27,12 @@ int main(void) {
     assert(pb_context_create(&ctx) == PB_OK && ctx != NULL);
     PbPose p = {0}; p.struct_size = sizeof(p);
     assert(pb_latest_pose(ctx, &p) == PB_NO_DATA);
+    PbPoseV2 v2 = {0}; v2.struct_size = sizeof(v2);
+    assert(pb_latest_pose_v2(ctx, &v2) == PB_NO_DATA);
+    assert(pb_latest_pose_v2(ctx, NULL) == PB_INVALID_ARGUMENT);
+    v2.struct_size = 4;
+    assert(pb_latest_pose_v2(ctx, &v2) == PB_BUFFER_TOO_SMALL && v2.struct_size == 4);
+    v2.struct_size = sizeof(v2);
     PbPose undersized_pose = {0}; undersized_pose.struct_size = 4;
     assert(pb_latest_pose(ctx, &undersized_pose) == PB_BUFFER_TOO_SMALL);
     char error[512]; uint32_t required = 0;
@@ -47,6 +55,9 @@ int main(void) {
     }
     assert(rc == PB_OK && p.fresh == 1 && p.sequence == 1);
     assert(fabsf(p.euler_yaw_pitch_roll_deg[0] - 30.0f) < 0.0001f);
+    assert(pb_latest_pose_v2(ctx, &v2) == PB_OK);
+    assert(v2.sample_time_kind == 0 && v2.sample_time_ms == 0 && v2.sample_clock_epoch == 0);
+    assert(v2.pose.sequence == p.sequence && v2.pose.received_ns == p.received_ns);
     uint64_t sequence = p.sequence, session = p.session_id;
     assert(pb_latest_pose(ctx, &p) == PB_OK && p.sequence == sequence);
     assert(pb_start(ctx) == PB_BUSY);
@@ -55,12 +66,23 @@ int main(void) {
     assert(pb_stop(ctx) == PB_OK);
     assert(pb_stop(ctx) == PB_OK);
     assert(pb_latest_pose(ctx, &p) == PB_OK && p.fresh == 0);
+    const char *timed = "{\"source\":{\"kind\":\"simulate\",\"rate_hz\":100,\"sample_clock\":true}}";
+    assert(pb_configure(ctx, timed, (uint32_t)strlen(timed)) == PB_OK);
     assert(pb_start(ctx) == PB_OK);
     for (int i = 0; i < 100; ++i) {
         wait_ms(5);
         if (pb_latest_pose(ctx, &p) == PB_OK && p.session_id != session) break;
     }
     assert(p.session_id != session && p.fresh == 1);
+    struct { PbPoseV2 value; uint64_t tail; } future = {0};
+    future.value.struct_size = sizeof(future); future.tail = UINT64_C(0x123456789abcdef0);
+    assert(pb_latest_pose_v2(ctx, &future.value) == PB_OK);
+    assert(future.tail == UINT64_C(0x123456789abcdef0));
+    assert(future.value.sample_time_kind == 2 && future.value.sample_clock_epoch == 1);
+    assert(future.value.sample_time_ms == future.value.pose.received_ns / 1000000);
+    assert(future.value.pose.struct_size == sizeof(PbPose));
+    assert(pb_stop(ctx) == PB_OK);
+    assert(pb_latest_pose_v2(ctx, &v2) == PB_OK && v2.pose.fresh == 0);
     assert(pb_context_destroy(ctx) == PB_OK);
     assert(pb_context_destroy(NULL) == PB_OK);
     puts("PoseBridge C ABI smoke: PASS");

@@ -2,21 +2,17 @@ use crate::model::*;
 use crate::osc::Sender;
 use crate::pose;
 use crate::protocol::{self, Frame, Parser};
+use crate::sample_clock::SampleClock;
 use crate::transport::{self, Connection};
 use futures_util::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicU64, Ordering},
-    mpsc,
-};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
 
 pub const STALE_AFTER: Duration = Duration::from_millis(500);
-static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 struct Shared {
@@ -238,19 +234,26 @@ fn begin_session(shared: &SharedRef) {
     let mut s = lock(shared);
     let reconnect_count = s.status.reconnect_count;
     *s = Shared::default();
-    s.status.session_id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+    // Positive OSC int64, randomized across process restarts and reconnections.
+    s.status.session_id = (uuid::Uuid::new_v4().as_u128() as u64 & i64::MAX as u64).max(1);
     s.status.reconnect_count = reconnect_count;
     s.status.state = ConnectionState::Connecting;
 }
 
-fn publish(shared: &SharedRef, q: pose::Quat, raw: &RawData, start: Instant) -> Result<()> {
+fn publish(
+    shared: &SharedRef,
+    q: pose::Quat,
+    raw: &RawData,
+    start: Instant,
+    now: Instant,
+    sample_time: Option<SampleTime>,
+) -> Result<()> {
     let q = pose::normalize(q)?;
     let euler = pose::to_euler(q)?;
-    let now = Instant::now();
     let mut s = lock(shared);
     if let Some(last) = s.last_pose {
         let gap = now.duration_since(last).as_secs_f64() * 1000.0;
-        if s.status.interval_min_ms == 0.0 || gap < s.status.interval_min_ms {
+        if s.status.pose_count == 1 || gap < s.status.interval_min_ms {
             s.status.interval_min_ms = gap;
         }
         s.status.interval_max_ms = s.status.interval_max_ms.max(gap);
@@ -268,7 +271,8 @@ fn publish(shared: &SharedRef, q: pose::Quat, raw: &RawData, start: Instant) -> 
     s.pose = Some(PoseSnapshot {
         session_id: s.status.session_id,
         sequence: s.status.pose_count,
-        received_ns: now.duration_since(start).as_nanos().min(u64::MAX as u128) as u64,
+        received_ns: now.duration_since(start).as_nanos().min(i64::MAX as u128) as u64,
+        sample_time,
         quaternion_xyzw: q,
         euler_deg: euler,
         raw: raw.clone(),
@@ -312,10 +316,12 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
         pattern,
         euler_deg,
         rate_hz,
+        sample_clock,
     } = config.source
     {
         begin_session(&shared);
         let start = Instant::now();
+        let mut clock = SampleClock::default();
         let mut sampling = tokio::time::interval(Duration::from_secs_f64(1.0 / rate_hz as f64));
         sampling.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -323,7 +329,9 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
             tokio::select! {
                 _ = cancel.changed() => return Err(Error::Cancelled),
                 _ = sampling.tick() => {
-                    let t = start.elapsed().as_secs_f64();
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(start);
+                    let t = elapsed.as_secs_f64();
                     let mut angles = euler_deg;
                     match pattern {
                         Pattern::Fixed => {},
@@ -333,7 +341,20 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
                         },
                         Pattern::Wrap => angles[0] = (170.0 + t*20.0 + 180.0).rem_euclid(360.0)-180.0,
                     }
-                    publish(&shared,pose::from_euler(angles)?,&RawData::default(),start)?;
+                    let sample_time = if sample_clock {
+                        // A late tick followed by a prompt tick can share one millisecond.
+                        // Do not manufacture a newer timestamp to disguise that duplicate.
+                        let Some(time) = clock.observe(
+                            SampleTimeKind::SimulatedElapsed,
+                            elapsed.as_millis().min(i64::MAX as u128) as u64,
+                            elapsed.as_nanos().min(i64::MAX as u128) as u64,
+                        ) else {
+                            lock(&shared).status.duplicate_sample_times = clock.duplicates;
+                            continue;
+                        };
+                        Some(time)
+                    } else { None };
+                    publish(&shared,pose::from_euler(angles)?,&RawData::default(),start,now,sample_time)?;
                     emit(&shared,&mut sender)?;
                 },
                 _ = wait_for_deadline(output_deadline) => emit(&shared,&mut sender)?,
@@ -397,6 +418,7 @@ async fn pump(
     lock(shared).status.ble_link = connection.link_status();
     let mut parser = Parser::default();
     let mut raw = RawData::default();
+    let mut sample_clock = SampleClock::default();
     let mounting = config
         .mounting
         .ok_or_else(|| Error::Invalid("mounting required".into()))?;
@@ -415,7 +437,7 @@ async fn pump(
             bytes = connection.read() => {
                 let bytes = bytes?;
                 last_bytes = Instant::now();
-                let ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+                let ns = last_bytes.duration_since(start).as_nanos().min(i64::MAX as u128) as u64;
                 let frames = parser.push(&bytes);
                 {
                     let mut state = lock(shared);
@@ -434,11 +456,29 @@ async fn pump(
                 }
                 for frame in frames {
                     lock(shared).status.frames_received += 1;
+                    let mut sample_time_ms = None;
                     let q = match frame {
                         Frame::Motion { acceleration_g,angular_velocity_dps,euler_xyz_deg } => {
                             raw.acceleration_g=Some(acceleration_g);raw.angular_velocity_dps=Some(angular_velocity_dps);
                             raw.euler_xyz_deg=Some(euler_xyz_deg);raw.motion_received_ns=Some(ns);
                             if config.pose_input==PoseInput::Euler { Some(mounting.from_sensor_euler(euler_xyz_deg)) } else { None }
+                        },
+                        Frame::Stream { sample_time_ms: time, angular_velocity_dps, euler_xyz_deg, quaternion_wxyz } => {
+                            // Partial stream groups must not retain old fields under a new host timestamp.
+                            raw.acceleration_g = None;
+                            raw.angular_velocity_dps = angular_velocity_dps;
+                            raw.euler_xyz_deg = euler_xyz_deg;
+                            raw.motion_received_ns = (angular_velocity_dps.is_some() || euler_xyz_deg.is_some()).then_some(ns);
+                            if let Some(q) = quaternion_wxyz {
+                                raw.quaternion_wxyz = Some(q);
+                                raw.quaternion_received_ns = Some(ns);
+                            }
+                            sample_time_ms = time;
+                            match config.pose_input {
+                                PoseInput::Euler => euler_xyz_deg.map(|e| mounting.from_sensor_euler(e)),
+                                PoseInput::StreamQuaternion => quaternion_wxyz.map(|[w,x,y,z]| mounting.from_sensor_quaternion([x,y,z,w])),
+                                PoseInput::Quaternion => None,
+                            }
                         },
                         Frame::Registers { address:0x51,values } => {
                             outstanding=None;
@@ -449,13 +489,29 @@ async fn pump(
                         _ => None,
                     };
                     if let Some(q) = q {
-                        match q.and_then(|q|publish(shared,q,&raw,start)) {
-                            Ok(()) => {},
+                        match q {
+                            Ok(q) => {
+                                let sample_time = if let Some(ms) = sample_time_ms {
+                                    let Some(time) = sample_clock.observe(SampleTimeKind::DeviceCalendar, ms, ns) else {
+                                        lock(shared).status.duplicate_sample_times = sample_clock.duplicates;
+                                        continue;
+                                    };
+                                    lock(shared).status.clock_discontinuities = sample_clock.discontinuities;
+                                    Some(time)
+                                } else { None };
+                                if publish(shared,q,&raw,start,last_bytes,sample_time).is_err() {
+                                    lock(shared).status.invalid_poses += 1;
+                                }
+                            },
                             Err(_) => lock(shared).status.invalid_poses+=1,
                         }
                     }
                 }
-                lock(shared).status.discarded_bytes=parser.discarded_bytes;
+                {
+                    let mut state = lock(shared);
+                    state.status.discarded_bytes = parser.discarded_bytes;
+                    state.status.invalid_frames = parser.invalid_frames;
+                }
                 emit(shared,sender)?;
             },
             _ = wait_for_deadline(output_deadline) => emit(shared,sender)?,
@@ -480,7 +536,7 @@ async fn pump(
                 }
                 if now.duration_since(last_bytes)>Duration::from_secs(10) { return Err(Error::Timeout("no device bytes for 10 seconds".into())); }
                 if start.elapsed()>Duration::from_secs(10) && lock(shared).status.frames_received==0 {
-                    return Err(Error::Protocol("no WIT 20-byte frames; check model, firmware and baud rate".into()));
+                    return Err(Error::Protocol("no supported WIT frames; check output format, model, firmware and baud rate".into()));
                 }
             },
         }
@@ -493,23 +549,34 @@ async fn read_back(
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<u16> {
     transport::cancel_after(cancel, Duration::from_secs(3), async {
-        connection.write(&protocol::read_register(address)).await?;
+        let request = protocol::read_register(address);
+        connection.write(&request).await?;
+        let mut retry_at = Instant::now() + Duration::from_millis(250);
         let mut parser = Parser::default();
         loop {
-            for frame in parser.push(&connection.read().await?) {
-                if let Frame::Registers {
-                    address: base,
-                    values,
-                } = frame
-                    && address >= base
-                    && address - base < 8
-                {
-                    return Ok(values[(address - base) as usize] as u16);
-                }
+            // A BLE disconnect can briefly suppress USB register replies. Retry
+            // only the read within the existing bounded timeout, never the write.
+            tokio::select! {
+                _ = tokio::time::sleep_until(retry_at.into()) => {
+                    connection.write(&request).await?;
+                    retry_at = Instant::now() + Duration::from_millis(250);
+                },
+                bytes = connection.read() => {
+                    for frame in parser.push(&bytes?) {
+                        if let Frame::Registers { address: base, values } = frame
+                            && address >= base && address - base < 8 {
+                            return Ok(values[(address - base) as usize] as u16);
+                        }
+                    }
+                },
             }
         }
     })
     .await
+    .map_err(|e| match e {
+        Error::Timeout(_) => Error::Timeout(format!("readback register 0x{address:02x}")),
+        other => other,
+    })
 }
 
 async fn apply_command(
@@ -518,6 +585,15 @@ async fn apply_command(
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<String> {
     let (address, value) = protocol::command_register(command)?;
+    if matches!(command, DeviceCommand::Output { .. }) {
+        // On older firmware 0x0E is D0MODE. Refuse ambiguous values before unlocking.
+        let current = read_back(connection, 0x0e, cancel).await?;
+        if !matches!(current, 0x61 | 0x81 | 0x84 | 0xa4) {
+            return Err(Error::Protocol(format!(
+                "output selection requires verified new firmware (0x0E is 0x{current:04x})"
+            )));
+        }
+    }
     transport::cancel_after(
         cancel,
         Duration::from_secs(2),
@@ -535,6 +611,19 @@ async fn apply_command(
         connection.write(&protocol::write_register(address, value)),
     )
     .await?;
+    if matches!(
+        command,
+        DeviceCommand::Rate { .. } | DeviceCommand::Output { .. }
+    ) {
+        // Firmware may ignore an immediately adjacent read while applying stream
+        // settings. This delay matches the verified USB configuration sequence.
+        // Do not delay calibration-start observation, which can auto-clear.
+        transport::cancel_after(cancel, Duration::from_secs(1), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(())
+        })
+        .await?;
+    }
     let observed = read_back(connection, address as u16, cancel).await?;
     if matches!(command, DeviceCommand::AccelCalibrate) {
         // This action auto-clears CALSW. A quick zero readback cannot prove that calibration started.
@@ -584,6 +673,90 @@ mod tests {
     use tokio_serial::SerialStream;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timestamp_stream_duplicates_stale_reset_and_absent_metadata() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let config = Config {
+            source: Source::Usb {
+                port: "test-pty".into(),
+                baud: 115200,
+            },
+            pose_input: PoseInput::StreamQuaternion,
+            mounting: Some(Mounting::parse("+x,+y,+z").unwrap()),
+            ..Config::default()
+        };
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let observed = shared.clone();
+        let (tx, mut cancel) = watch::channel(false);
+        let handle = tokio::spawn(async move {
+            pump(&config, &shared, &mut connection, &mut None, &mut cancel).await
+        });
+        let frame = |ms| {
+            vec![
+                0x55, 0x84, 15, 1, 1, 0, 0, 0, ms, 0, 0xff, 0x7f, 0, 0, 0, 0, 0, 0,
+            ]
+        };
+        device
+            .write_all(&[frame(10), frame(15)].concat())
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while lock(&observed).status.pose_count < 2 {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let first = lock(&observed).pose.clone().unwrap();
+        assert_eq!(first.sample_time.unwrap().clock_epoch, 1);
+        assert_eq!(Some(first.received_ns), first.raw.quaternion_received_ns);
+        assert_eq!(first.raw.euler_xyz_deg, None);
+        // Duplicates arriving throughout the timeout cannot refresh the pose.
+        for _ in 0..12 {
+            device.write_all(&frame(15)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        {
+            let state = lock(&observed);
+            assert_eq!(state.status.pose_count, 2);
+            assert_eq!(state.status.duplicate_sample_times, 12);
+            assert!(!fresh(&state, Instant::now()));
+            assert_eq!(state.pose.as_ref().unwrap().received_ns, first.received_ns);
+        }
+        device.write_all(&frame(5)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        {
+            let state = lock(&observed);
+            assert!(fresh(&state, Instant::now()));
+            assert_eq!(state.status.clock_discontinuities, 1);
+            assert_eq!(
+                state
+                    .pose
+                    .as_ref()
+                    .unwrap()
+                    .sample_time
+                    .unwrap()
+                    .clock_epoch,
+                2
+            );
+        }
+        device
+            .write_all(&[0x55, 0x04, 0xff, 0x7f, 0, 0, 0, 0, 0, 0])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(lock(&observed).pose.as_ref().unwrap().sample_time.is_none());
+        // Stream quaternion input is passive; it must not issue register requests.
+        let mut command = [0u8; 5];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), device.read_exact(&mut command))
+                .await
+                .is_err()
+        );
+        tx.send(true).unwrap();
+        assert!(matches!(handle.await.unwrap(), Err(Error::Cancelled)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn quaternion_reads_wait_for_response_retry_timeout_and_cancel() {
         let (mut device, host) = SerialStream::pair().unwrap();
         let mut connection = Connection::Usb(host);
@@ -624,12 +797,18 @@ mod tests {
         let mut response = [0u8; 20];
         response[..4].copy_from_slice(&[0x55, 0x71, 0x51, 0]);
         response[4..6].copy_from_slice(&32767i16.to_le_bytes());
+        // A timestamp in a preceding stream frame must not be cached onto a register reply.
+        device
+            .write_all(&[0x55, 0x81, 15, 1, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0])
+            .await
+            .unwrap();
         device.write_all(&response).await.unwrap();
         tokio::time::timeout(Duration::from_millis(200), device.read_exact(&mut command))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(lock(&observed).status.pose_count, 1);
+        assert!(lock(&observed).pose.as_ref().unwrap().sample_time.is_none());
         assert!(fresh(&lock(&observed), Instant::now()));
         tx.send(true).unwrap();
         assert!(matches!(
@@ -659,6 +838,7 @@ mod tests {
                 target: socket.local_addr().unwrap(),
                 max_rate_hz: 50,
                 format: OscFormat::Euler,
+                version: OscVersion::V1,
             }),
             ..Config::default()
         };
@@ -725,6 +905,79 @@ mod tests {
             ended.is_err(),
             "physical EOF must leave the pump for reconnect"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configuration_readback_retries_only_read_requests() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let (tx, mut cancel) = watch::channel(false);
+        let worker =
+            tokio::spawn(async move { read_back(&mut connection, 0x0e, &mut cancel).await });
+        let mut command = [0u8; 5];
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_secs(1), device.read_exact(&mut command))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(command, protocol::read_register(0x0e));
+        }
+        let mut response = [0u8; 20];
+        response[..6].copy_from_slice(&[0x55, 0x71, 0x0e, 0, 0x84, 0]);
+        device.write_all(&response).await.unwrap();
+        assert_eq!(worker.await.unwrap().unwrap(), 0x84);
+        drop(tx);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn output_profile_requires_new_firmware_and_matching_readback() {
+        for (current, wrong) in [(0x61u16, false), (0x61, true), (0x01, false)] {
+            let (mut device, host) = SerialStream::pair().unwrap();
+            let mut connection = Connection::Usb(host);
+            let commands = Arc::new(Mutex::new(Vec::new()));
+            let seen = commands.clone();
+            let server = tokio::spawn(async move {
+                let mut reads = 0;
+                let mut bytes = [0u8; 5];
+                while device.read_exact(&mut bytes).await.is_ok() {
+                    seen.lock().unwrap().push(bytes);
+                    if bytes[2] == 0x27 {
+                        assert_eq!(bytes, protocol::read_register(0x0e));
+                        reads += 1;
+                        let observed = if reads == 1 || wrong { current } else { 0x84 };
+                        let mut reply = [0u8; 20];
+                        reply[..4].copy_from_slice(&[0x55, 0x71, 0x0e, 0]);
+                        reply[4..6].copy_from_slice(&observed.to_le_bytes());
+                        device.write_all(&reply).await.unwrap();
+                    }
+                }
+            });
+            let (_tx, mut cancel) = watch::channel(false);
+            let result = apply_command(
+                &mut connection,
+                &DeviceCommand::Output {
+                    format: OutputProfile::TimestampQuaternion,
+                },
+                &mut cancel,
+            )
+            .await;
+            assert_eq!(result.is_err(), current == 1 || wrong);
+            let sent = commands.lock().unwrap().clone();
+            assert_eq!(sent[0], protocol::read_register(0x0e));
+            if current == 1 {
+                assert_eq!(sent.len(), 1, "ambiguous firmware must receive no writes");
+            } else {
+                assert_eq!(sent[1], protocol::UNLOCK);
+                assert_eq!(sent[2], protocol::write_register(0x0e, 0x84));
+                assert_eq!(
+                    sent.len(),
+                    4,
+                    "preflight, unlock, output, readback only; no save"
+                );
+            }
+            server.abort();
+            let _ = server.await;
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
