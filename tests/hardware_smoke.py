@@ -26,14 +26,16 @@ class Bridge:
             'pb_snapshot_json':[c.c_void_p,c.c_void_p,c.c_uint32,c.POINTER(c.c_uint32)],
         }.items():
             fn=getattr(self.lib,name); fn.argtypes=args; fn.restype=c.c_int
-        assert self.lib.pb_abi_version()==300
+        assert self.lib.pb_abi_version()==400
         assert self.lib.pb_context_create(c.byref(self.ctx))==0
     def close(self):
         if self.ctx: assert self.lib.pb_context_destroy(self.ctx)==0; self.ctx=c.c_void_p()
     def snapshot(self):
         buffer=c.create_string_buffer(32768);needed=c.c_uint32()
         assert self.lib.pb_snapshot_json(self.ctx,buffer,len(buffer),c.byref(needed))==0
-        return json.loads(buffer.value)
+        value=json.loads(buffer.value)
+        assert value['schema']==4
+        return value
     def configure(self, config):
         data=json.dumps(config).encode();assert self.lib.pb_configure(self.ctx,data,len(data))==0
     def operation(self, command=None):

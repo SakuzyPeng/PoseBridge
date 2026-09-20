@@ -8,7 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 
-pub const PB_ABI_VERSION: u32 = 300;
+pub const PB_ABI_VERSION: u32 = 400;
 pub const PB_OK: i32 = 0;
 pub const PB_INVALID_ARGUMENT: i32 = 1;
 pub const PB_NO_DATA: i32 = 2;
@@ -47,6 +47,9 @@ pub struct PbPose {
     pub session_id: u64,
     pub sequence: u64,
     pub received_ns: u64,
+    /// Host monotonic nanoseconds from reception to this query, including while stopped.
+    /// Excludes device/link delay. fresh also requires an active acquisition state.
+    pub age_ns: u64,
     pub quaternion_xyzw: [f32; 4],
     pub euler_yaw_pitch_roll_deg: [f32; 3],
     /// bit 0: complete motion group; bit 1: quaternion; bits 2/3/4: Euler/accel/gyro present.
@@ -316,6 +319,7 @@ fn pose_to_c(p: &PoseSnapshot) -> PbPose {
         session_id: p.session_id,
         sequence: p.sequence,
         received_ns: p.received_ns,
+        age_ns: p.age_ns,
         quaternion_xyzw: p.quaternion_xyzw.map(|v| v as f32),
         euler_yaw_pitch_roll_deg: p.euler_deg.map(|v| v as f32),
         raw_flags,

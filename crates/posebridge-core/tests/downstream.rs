@@ -29,6 +29,8 @@ fn source_identity_snapshot_and_restart() {
         Err(Error::Busy)
     ));
     let json: serde_json::Value = serde_json::from_str(&snapshot_json(&s).unwrap()).unwrap();
+    assert_eq!(json["schema"], SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(json["pose"]["age_ns"], p.age_ns.to_string());
     assert!(json["pose"]["sequence"].is_string());
     assert!(json["status"]["delivery"]["gap_histogram"][0].is_string());
     let instance = p.instance_id;

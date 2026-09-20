@@ -304,6 +304,7 @@ mod tests {
             session_id: 1,
             sequence: 1,
             received_ns: 0,
+            age_ns: 0,
             sample_time: None,
             quaternion_xyzw: [0., 0., 0., 1.],
             euler_deg: [0.; 3],

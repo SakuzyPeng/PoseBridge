@@ -1,8 +1,8 @@
-# PoseBridge C ABI 0.3（experimental）
+# PoseBridge C ABI 0.4（experimental）
 
-头文件 [posebridge.h](../include/posebridge.h) 由 cbindgen 生成；`pb_abi_version()` 必须等于 **300**。
-当前无已发布消费者，本版统一重整了早期草案：不保留旧布局、`PbPoseV2`、`pb_latest_pose_v2` 或 `pb_status_json`。
-源码、头文件和动态库一起升级；使用 `pb_latest_pose`、`pb_status`、`pb_snapshot_json`。
+头文件 [posebridge.h](../include/posebridge.h) 由 cbindgen 生成；`pb_abi_version()` 必须等于 **400**。
+0.4 在 `PbPose` 中加入 `age_ns`，不保留 ABI 300 布局。源码、头文件和动态库一起升级并重新编译调用方；
+继续使用 `pb_latest_pose`、`pb_status`、`pb_snapshot_json`，不新增兼容 getter。
 
 ## 生命周期与查询
 
@@ -18,16 +18,27 @@ pb_context_create → pb_configure
 不会自动暂停和恢复。快照查询可以与后台采集并行；销毁前停止所有调用。无外部回调，这些 API 不属于音频回调接口。
 stop 幂等并释放连接；destroy 消耗句柄且允许 NULL。start 成功只表示任务受理。
 
-- `pb_latest_pose`：统一 `PbPose`，184 字节，包含身份、参考／描述版本、采样时间、姿态和原始诊断字段。
+- `pb_latest_pose`：统一 `PbPose`，192 字节，包含身份、参考／描述版本、采样时间、查询年龄、姿态和原始诊断字段。
+  `age_ns` 紧随 `received_ns`，偏移 80；四元数偏移 88。
 - `pb_status`：统一 `PbStatus`，136 字节，包含当前状态、采样／交付／发送／合并与错误统计。
 - 上述大小针对目标 macOS arm64／Windows x64。先初始化 struct_size；容量不足不写输出，较大结构的未知尾部保留。
-- `pb_snapshot_json`：一次锁定并复制 `schema/descriptor/status/pose/operation`，避免分别查询时错配；64 位值均为十进制字符串。
+- `pb_snapshot_json`：一次锁定并复制 `schema/descriptor/status/pose/operation`，本地 schema=4；64 位值均为十进制字符串。
+  此版本与 OSC 独立：OSC 仍为协议 3，info/status 的 schema 仍为 3。
 - `pb_devices_json`：读取 scan 的设备列表；`pb_error_copy`：读取上次同步 API 错误。
 
 字符串使用调用方缓冲区；required 包含 NUL。NULL＋capacity=0 可查询长度，返回 PB_BUFFER_TOO_SMALL。
 快照可能变化，需处理第二次容量不足。首次姿态前返回 PB_NO_DATA；陈旧或停止后的最后姿态仍可读，fresh=0。
 raw_flags：bit0 完整运动组，bit1 原始四元数，bit2/3/4 分别为 Euler／加速度／角速度存在。
 原始运动组和四元数组有独立主机接收时间，不应推断它们都属于同一物理采样。
+
+`age_ns` 是从 PoseBridge 收到当前姿态到本次查询的主机单调经过纳秒，最大饱和到正 int64 范围。
+同次查询的年龄与 fresh 使用同一时刻。重复轮询可只改变年龄，不改变序号、设备采样时间或 metadata_revision；
+停止后保留的姿态继续计龄，但 fresh=0。新连接清空旧姿态，首帧前返回 PB_NO_DATA。
+
+默认 fresh 要求采集状态有效且年龄严格小于 500 ms。消费方可使用更严格的条件，例如
+`pose.fresh && pose.age_ns < 100000000`。必须先检查时效再做序号去重，同一份姿态会随时间过期。
+年龄是查询时快照，返回后不会自行增长；宿主排队期间的经过时间需由宿主自己的单调时钟补计。
+它不包含设备采样到 USB/BLE 接收的延迟，不使用设备日历计算，也不等于运动到声音的总延迟。
 
 状态：0 idle、1 scanning、2 connecting、3 active、4 stale、5 reconnecting、6 stopped、7 failed、8 configuring、9 complete、10 inspecting。
 
@@ -67,4 +78,5 @@ valid 表示成功读取且未被本上下文已知的变化作废，不保证�
 9 buffer too small，10 internal，11 cancelled。异步错误与控制结果从完整快照读取。
 可展开 panic 在边界捕获；不承诺从进程终止/OOM 恢复。非空指针须有效、对齐，并满足长度与生命周期契约。
 
-[真实 C 调用测试](../tests/c_api_smoke.c)覆盖版本、布局、缓冲区、原子 JSON、忙状态、停止及新实例。
+[真实 C 调用测试](../tests/c_api_smoke.c)覆盖版本、布局、缓冲区、年龄、原子 JSON、忙状态、停止及新实例。
+[C11 消费示例](consumer.md)提供控制线程轮询与宿主接入点。

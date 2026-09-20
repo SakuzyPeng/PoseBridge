@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define PB_ABI_VERSION 300
+#define PB_ABI_VERSION 400
 
 #define PB_OK 0
 
@@ -59,6 +59,11 @@ typedef struct PbPose {
   uint64_t session_id;
   uint64_t sequence;
   uint64_t received_ns;
+  /**
+   * Host monotonic nanoseconds from reception to this query, including while stopped.
+   * Excludes device/link delay. fresh also requires an active acquisition state.
+   */
+  uint64_t age_ns;
   float quaternion_xyzw[4];
   float euler_yaw_pitch_roll_deg[3];
   /**

@@ -1,6 +1,7 @@
 # 当前验证入口
 
-PoseBridge 0.3／当前协议 3 的功能与控制验证见 [0.3 验证记录](measurements/2026-09-19-downstream.md)。
+PoseBridge 0.4／C ABI 400／本地快照 schema 4 的软件消费链路验证见 [0.4 验证记录](measurements/2026-09-19-consumer-age.md)。
+OSC 继续使用协议 3；既有设备控制与硬件记录见 [0.3 验证记录](measurements/2026-09-19-downstream.md)。
 以下内容保留为 0.1/0.2 历史通信记录，不表示旧协议仍可使用；当前命令与字段以 [usage](usage.md)、[protocol](protocol.md)、[C ABI](c-api.md) 为准。
 
 # 历史验证记录

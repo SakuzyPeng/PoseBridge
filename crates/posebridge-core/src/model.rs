@@ -270,6 +270,9 @@ pub struct PoseSnapshot {
     pub sequence: u64,
     #[serde(serialize_with = "decimal::serialize")]
     pub received_ns: u64,
+    /// Host monotonic time since reception at this query; excludes device/link delay.
+    #[serde(serialize_with = "decimal::serialize")]
+    pub age_ns: u64,
     /// Belongs only to this pose frame; absent on untimestamped/register data.
     pub sample_time: Option<SampleTime>,
     pub quaternion_xyzw: [f64; 4],
@@ -371,6 +374,8 @@ pub enum OutputProfile {
 }
 
 pub const PROTOCOL_VERSION: u32 = 3;
+/// Local Rust/CLI/C ABI snapshot schema, independent of the OSC wire protocol.
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 pub const MAX_SOURCE_ID_BYTES: usize = 256;
 
 pub fn validate_source_id(value: &str) -> Result<()> {

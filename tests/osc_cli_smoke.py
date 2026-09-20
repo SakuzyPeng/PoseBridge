@@ -65,7 +65,8 @@ for (fmt, expected), synthetic in itertools.product([
         stop.set(); reader.join(); udp.close()
     assert run.returncode == 0, (run.stdout, run.stderr)
     snapshots = [json.loads(line) for line in run.stdout.splitlines()]
-    assert all(s['schema'] == 3 and s['descriptor']['source_id'] == source_id for s in snapshots)
+    assert all(s['schema'] == 4 and s['descriptor']['source_id'] == source_id for s in snapshots)
+    assert all(isinstance(s['pose']['age_ns'], str) for s in snapshots if s['pose'])
     assert snapshots[-1]['status']['state'] == 'stopped'
     assert any(s['pose'] and s['pose']['fresh'] for s in snapshots)
     pose_count = 0; telemetry = []; previous = None

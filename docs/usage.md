@@ -1,6 +1,6 @@
 # PoseBridge 使用指南
 
-PoseBridge 0.3 为维特 BWT901BLECL5.0 提供 BLE／USB 采集、安装转换、当前 OSC 协议和实验 C ABI。
+PoseBridge 0.4 为维特 BWT901BLECL5.0 提供 BLE／USB 采集、安装转换、当前 OSC 协议和实验 C ABI。
 只保留一套当前接口；旧版调用方须同步升级。MacinRender 提供原生接收器，GUI 尚未适配。
 
 ## 构建
@@ -29,7 +29,8 @@ BLE 由程序连接，无需先在系统蓝牙面板常规配对。macOS 须允�
 Mac 使用不透明平台 UUID，Windows 可显示蓝牙地址；广播名称不能代替标识。
 USB 115200、8N1、无流控，使用扫描得到的端口，不把示例路径当作固定端口。
 
-JSON 是统一的 schema=3 快照：descriptor、status、pose、operation。所有 64 位标识/时间/计数都是十进制字符串。
+CLI／C ABI 的本地 JSON 是 schema=4 快照：descriptor、status、pose、operation。
+pose.age_ns 是接收后到查询时的经过纳秒；所有 64 位标识/时间/计数都是十进制字符串。OSC 心跳继续使用 schema=3。
 未提供诊断安装映射时使用传感器单位基底，并显示未验收提示。普通读取不更改设备设置。
 
 ## 设备检查与控制
@@ -100,6 +101,9 @@ cargo test --workspace --release --locked
 python3 tests/osc_cli_smoke.py
 python3 scripts/check_c_api.py
 ```
+
+`check_c_api.py` 同时编译并运行 C11 消费示例及其测试，将可运行示例保留在 target/release/pose_consumer（Windows 加 .exe）。
+默认示例使用模拟器，不需要设备，见[接入说明](consumer.md)。
 
 tests/hardware_smoke.py 默认只读检查与采集；显式 --exercise-config 才临时切换可恢复配置并在 finally 恢复。
 --expect-reconnect 用于用户配合的物理拔插，不能与配置切换同时使用。脚本不会校准、归零、SAVE 或恢复默认。

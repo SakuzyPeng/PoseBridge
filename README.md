@@ -10,9 +10,10 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 - BLE 无线与 USB 串口采集，共用数据解析和姿态转换。
 - 设备扫描、只读配置检查、显式设备控制与断线重连。
 - 四元数／欧拉角 OSC 输出、时间戳、来源描述与独立状态心跳，以及无设备模拟器。
-- Rust 核心库、CLI、实验性 C ABI 0.3（版本 300）。
+- Rust 核心库、CLI、实验性 C ABI 0.4（版本 400），以及可运行的 C11 消费示例。
 
-0.3 统一了此前未发布的协议和 ABI：只支持当前协议 3，旧地址、旧结构和 `--osc-version` 已移除。
+当前 OSC 协议为 3，C ABI 为 400，本地 JSON 快照 schema 为 4。快照提供查询时的 `age_ns`，方便消费方设置时效阈值。
+只支持当前接口；旧地址、旧结构和 `--osc-version` 已移除，C 调用方须同步升级头文件与动态库。
 
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
 macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。
@@ -37,6 +38,7 @@ Windows 可执行文件为 `target/release/posebridge.exe`。
 - [协议与坐标](docs/protocol.md)：输入帧、旋转约定、OSC 消息与数据时效。
 - [时间戳与下游接口](docs/timestamps.md)：显式启用、时钟代次和跨进程时间边界。
 - [C ABI](docs/c-api.md)：生命周期、配置和快照轮询。
+- [C11 消费示例](docs/consumer.md)：无需设备运行，处理年龄、去重、过期和参考变化。
 - [验证记录](docs/validation.md)：已执行检查、实机结果和待验证项。
 
 ## 许可

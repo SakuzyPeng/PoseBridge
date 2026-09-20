@@ -415,19 +415,31 @@ fn invalidate_reference(s: &mut Shared, reason: &str) {
 
 fn snapshot(shared: &SharedRef) -> Snapshot {
     let s = lock(shared);
-    let is_fresh = fresh(&s, Instant::now());
+    snapshot_at(&s, Instant::now())
+}
+
+fn pose_at(s: &Shared, now: Instant) -> Option<PoseSnapshot> {
+    let mut pose = s.pose.clone()?;
+    let received = s.last_pose?;
+    pose.age_ns = now
+        .duration_since(received)
+        .as_nanos()
+        .min(i64::MAX as u128) as u64;
+    pose.fresh = fresh(s, now);
+    Some(pose)
+}
+
+fn snapshot_at(s: &Shared, now: Instant) -> Snapshot {
+    let is_fresh = fresh(s, now);
     let mut status = s.status.clone();
     if status.state == ConnectionState::Active && !is_fresh {
         status.state = ConnectionState::Stale;
     }
     Snapshot {
-        schema: PROTOCOL_VERSION,
+        schema: SNAPSHOT_SCHEMA_VERSION,
         descriptor: s.descriptor.clone(),
         status,
-        pose: s.pose.clone().map(|mut p| {
-            p.fresh = is_fresh;
-            p
-        }),
+        pose: pose_at(s, now),
         operation: s.operation.clone(),
     }
 }
@@ -508,6 +520,7 @@ fn publish(
         session_id: s.status.session_id,
         sequence: s.status.session_samples,
         received_ns: now.duration_since(start).as_nanos().min(i64::MAX as u128) as u64,
+        age_ns: 0,
         sample_time,
         quaternion_xyzw: q,
         euler_deg: euler,
@@ -518,25 +531,15 @@ fn publish(
 }
 
 fn emit(shared: &SharedRef, sender: &mut Option<Sender>) -> Result<()> {
-    let now = Instant::now();
-    let (pose, source_id, age_ns) = {
+    let (pose, source_id, now) = {
         let s = lock(shared);
-        let pose = s.pose.clone().map(|mut p| {
-            p.fresh = fresh(&s, now);
-            p
-        });
-        (
-            pose,
-            s.descriptor.source_id.clone(),
-            s.last_pose.map_or(0, |at| {
-                now.duration_since(at).as_nanos().min(i64::MAX as u128) as u64
-            }),
-        )
+        let now = Instant::now();
+        (pose_at(&s, now), s.descriptor.source_id.clone(), now)
     };
     if let Some(sender) = sender {
         let previous_errors = sender.send_errors();
         let sent = if let Some(pose) = pose {
-            sender.send_if_due(&pose, &source_id, age_ns, now)?
+            sender.send_if_due(&pose, &source_id, pose.age_ns, now)?
         } else {
             sender.clear_pending();
             false
@@ -802,6 +805,113 @@ async fn pump(
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn query_age_freshness_and_stopped_pose_share_one_host_clock() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let start = Instant::now();
+        let received = start + Duration::from_millis(10);
+        let sample = Some(SampleTime {
+            kind: SampleTimeKind::DeviceCalendar,
+            time_ms: 473398726930,
+            clock_epoch: 1,
+        });
+        publish(
+            &shared,
+            [0., 0., 0., 1.],
+            &RawData::default(),
+            start,
+            received,
+            sample,
+        )
+        .unwrap();
+        let original = snapshot_at(&lock(&shared), received).pose.unwrap();
+        for age in [0, 1, 499_999_999, 500_000_000, 750_000_000] {
+            let value = snapshot_at(&lock(&shared), received + Duration::from_nanos(age));
+            let pose = value.pose.as_ref().unwrap();
+            assert_eq!(pose.age_ns, age);
+            assert_eq!(pose.fresh, age < 500_000_000);
+            assert_eq!(
+                value.status.state,
+                if pose.fresh {
+                    ConnectionState::Active
+                } else {
+                    ConnectionState::Stale
+                }
+            );
+            assert_eq!(pose.sequence, original.sequence);
+            assert_eq!(pose.received_ns, original.received_ns);
+            assert_eq!(pose.metadata_revision, original.metadata_revision);
+            assert_eq!(pose.sample_time, sample);
+            let json: serde_json::Value =
+                serde_json::from_str(&snapshot_json(&value).unwrap()).unwrap();
+            assert_eq!(json["schema"], 4);
+            assert_eq!(json["pose"]["age_ns"], age.to_string());
+        }
+        lock(&shared).status.state = ConnectionState::Stopped;
+        for age in [1_000_000_000, 2_000_000_000] {
+            let value = snapshot_at(&lock(&shared), received + Duration::from_nanos(age));
+            let pose = value.pose.unwrap();
+            assert!(!pose.fresh);
+            assert_eq!(pose.age_ns, age);
+            assert_eq!(pose.sequence, original.sequence);
+            assert_eq!(value.status.state, ConnectionState::Stopped);
+        }
+    }
+
+    #[test]
+    fn new_sessions_clear_age_and_device_calendar_does_not_define_it() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let start = Instant::now();
+        assert!(snapshot_at(&lock(&shared), start).pose.is_none());
+        begin_session(&shared);
+        for (index, time_ms) in [473398726930, 0].into_iter().enumerate() {
+            let received = start + Duration::from_secs(index as u64);
+            publish(
+                &shared,
+                [0., 0., 0., 1.],
+                &RawData::default(),
+                start,
+                received,
+                Some(SampleTime {
+                    kind: SampleTimeKind::DeviceCalendar,
+                    time_ms,
+                    clock_epoch: index as u64 + 1,
+                }),
+            )
+            .unwrap();
+            let pose = snapshot_at(&lock(&shared), received + Duration::from_millis(20))
+                .pose
+                .unwrap();
+            assert_eq!(pose.age_ns, 20_000_000);
+            assert!(pose.fresh);
+        }
+        let old_session = lock(&shared).status.session_id;
+        begin_session(&shared);
+        let value = snapshot_at(&lock(&shared), start + Duration::from_secs(3));
+        assert!(value.pose.is_none());
+        assert_ne!(value.descriptor.session_id, old_session);
+        let received = start + Duration::from_secs(4);
+        publish(
+            &shared,
+            [0., 0., 0., 1.],
+            &RawData::default(),
+            received,
+            received,
+            None,
+        )
+        .unwrap();
+        let pose = snapshot_at(&lock(&shared), received).pose.unwrap();
+        assert_eq!(pose.age_ns, 0);
+        assert_eq!(pose.sequence, 1);
+        assert!(pose.fresh);
     }
 }
 

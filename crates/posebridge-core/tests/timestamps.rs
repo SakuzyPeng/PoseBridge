@@ -158,6 +158,7 @@ fn osc_keeps_int64_precision_and_distinguishes_absent_time() {
         session_id: 0x123456789abcdef,
         sequence: (1 << 53) + 1,
         received_ns: (1 << 54) + 3,
+        age_ns: 0,
         sample_time: Some(SampleTime {
             kind: SampleTimeKind::DeviceCalendar,
             time_ms: 473398726930,
