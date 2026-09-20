@@ -21,7 +21,7 @@ from pathlib import Path
 def decode(data):
     def string(offset):
         end = data.index(0, offset)
-        return data[offset:end].decode("ascii"), (end + 4) & ~3
+        return data[offset:end].decode("utf-8"), (end + 4) & ~3
 
     address, offset = string(0)
     tags, offset = string(offset)

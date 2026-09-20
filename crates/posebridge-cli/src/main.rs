@@ -273,9 +273,11 @@ enum Command {
     },
 }
 
-fn wait_operation(controller: &Controller, interrupted: &AtomicBool) -> Result<()> {
+fn wait_operation(controller: &mut Controller, interrupted: &AtomicBool) -> Result<()> {
     loop {
         if interrupted.load(Ordering::Relaxed) {
+            // Complete cancellation before callers serialize the terminal snapshot.
+            controller.stop()?;
             return Err(Error::Cancelled);
         }
         let status = controller.status();
@@ -382,7 +384,7 @@ fn run() -> Result<()> {
             json,
         } => {
             controller.scan_start(transport.into(), timeout_seconds)?;
-            wait_operation(&controller, &interrupted)?;
+            wait_operation(&mut controller, &interrupted)?;
             let devices = controller.devices();
             if json {
                 println!(
@@ -407,7 +409,7 @@ fn run() -> Result<()> {
         Command::Inspect { input, json } => {
             controller.set_config(input.config(false)?)?;
             controller.inspect_start()?;
-            let result = wait_operation(&controller, &interrupted);
+            let result = wait_operation(&mut controller, &interrupted);
             let snapshot = controller.snapshot();
             if json {
                 println!("{}", posebridge_core::snapshot_json(&snapshot)?);
@@ -510,7 +512,7 @@ fn run() -> Result<()> {
             };
             controller.set_config(input.config(false)?)?;
             controller.configure_device(command)?;
-            let result = wait_operation(&controller, &interrupted);
+            let result = wait_operation(&mut controller, &interrupted);
             if json {
                 println!(
                     "{}",
@@ -536,5 +538,25 @@ fn main() {
         } else {
             1
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_wait_stops_worker_before_returning_snapshot() {
+        let mut controller = Controller::new().unwrap();
+        controller.start().unwrap();
+
+        let result = wait_operation(&mut controller, &AtomicBool::new(true));
+        assert!(matches!(result, Err(Error::Cancelled)));
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.status.state, ConnectionState::Stopped);
+        assert!(snapshot.pose.is_none_or(|pose| !pose.fresh));
+        // A returned cancellation must also have released the operation slot.
+        controller.start().unwrap();
+        controller.stop().unwrap();
     }
 }

@@ -379,6 +379,7 @@ async fn control_connection(
             let mut s = lock(shared);
             if let Some(observation) = observation {
                 s.descriptor.device = observation;
+                s.descriptor.metadata_revision += 1;
             }
             s.status.configuration_report = Some(message.clone());
             if let Some(op) = &mut s.operation {
@@ -672,6 +673,8 @@ async fn pump(
     let mut next_link_check = start + Duration::from_secs(1);
     lock(shared).status.ble_link = connection.link_status();
     let mut parser = Parser::default();
+    // Public frame counters span the whole start; this watchdog is connection-local.
+    let mut received_frame = false;
     let mut raw = RawData::default();
     let mut sample_clock = SampleClock::default();
     let mounting = config
@@ -696,6 +699,7 @@ async fn pump(
                 let old_discarded = parser.discarded_bytes;
                 let old_invalid = parser.invalid_frames;
                 let frames = parser.push(&bytes);
+                received_frame |= !frames.is_empty();
                 {
                     let mut state = lock(shared);
                     state.status.bytes_received += bytes.len() as u64;
@@ -793,7 +797,7 @@ async fn pump(
                     }
                 }
                 if now.duration_since(last_bytes)>Duration::from_secs(10) { return Err(Error::Timeout("no device bytes for 10 seconds".into())); }
-                if start.elapsed()>Duration::from_secs(10) && lock(shared).status.frames_received==0 {
+                if start.elapsed()>Duration::from_secs(10) && !received_frame {
                     return Err(Error::Protocol("no supported WIT frames; check output format, model, firmware and baud rate".into()));
                 }
             },
@@ -958,12 +962,14 @@ mod tests {
     async fn cancellation_after_write_invalidates_reference_without_repeating_write() {
         let (mut device, host) = SerialStream::pair().unwrap();
         let mut connection = Connection::Usb(host);
-        let shared = Arc::new(Mutex::new(Shared::default()));
-        lock(&shared).operation = Some(OperationStatus::new("rate".into()));
-        lock(&shared).descriptor.device.valid = true;
-        let observed = shared.clone();
-        let (tx, mut cancel) = watch::channel(false);
-        let worker = tokio::spawn(async move {
+        let mut controller = Controller::new().unwrap();
+        {
+            let mut state = lock(&controller.shared);
+            state.status.state = ConnectionState::Configuring;
+            state.operation = Some(OperationStatus::new("rate".into()));
+            state.descriptor.device.valid = true;
+        }
+        controller.launch(None, move |shared, mut cancel| async move {
             control_connection(
                 &shared,
                 &mut connection,
@@ -977,12 +983,154 @@ mod tests {
         assert_eq!(bytes, protocol::UNLOCK);
         device.read_exact(&mut bytes).await.unwrap();
         assert_eq!(bytes, protocol::write_register(3, 9));
-        tx.send(true).unwrap();
-        assert!(matches!(worker.await.unwrap(), Err(Error::Cancelled)));
-        let s = lock(&observed);
+        controller.stop().unwrap();
+        let s = controller.snapshot();
+        assert_eq!(s.status.state, ConnectionState::Stopped);
+        let operation = s.operation.unwrap();
+        assert_eq!(operation.outcome, OperationOutcome::Cancelled);
+        assert!(operation.write_attempted && operation.reference_may_have_changed);
         assert!(!s.descriptor.device.valid);
         assert_eq!(s.descriptor.reference_epoch, 2);
         assert_eq!(s.descriptor.reference_reason, "device_control_uncertain");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reset_observation_advances_metadata_revision() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut registers = [0u16; 128];
+            registers[3] = 9;
+            registers[0x0e] = 0x84;
+            registers[0x24] = 1;
+            registers[0x2e] = 13115;
+            let mut ready = Some(ready_tx);
+            let mut resume = Some(resume_rx);
+            let mut bytes = [0u8; 5];
+            while device.read_exact(&mut bytes).await.is_ok() {
+                if bytes[2] == 0x27 {
+                    let address = u16::from_le_bytes([bytes[3], bytes[4]]) as usize;
+                    if address == 0x2e
+                        && let Some(ready) = ready.take()
+                    {
+                        // Hold the final inspection reply so both descriptor states
+                        // can be observed without relying on polling a timing window.
+                        ready.send(()).unwrap();
+                        resume.take().unwrap().await.unwrap();
+                    }
+                    let mut reply = [0u8; 20];
+                    reply[..4].copy_from_slice(&[0x55, 0x71, bytes[3], bytes[4]]);
+                    for i in 0..8 {
+                        reply[4 + 2 * i..6 + 2 * i]
+                            .copy_from_slice(&registers[address + i].to_le_bytes());
+                    }
+                    device.write_all(&reply).await.unwrap();
+                } else if bytes == protocol::write_register(0, 1) {
+                    registers[3] = 6;
+                    registers[0x0e] = 0x61;
+                    registers[0x24] = 0;
+                }
+            }
+        });
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        lock(&shared).operation = Some(OperationStatus::new("reset_defaults".into()));
+        let observed = shared.clone();
+        let (_tx, mut cancel) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            control_connection(
+                &shared,
+                &mut connection,
+                &DeviceCommand::ResetDefaults,
+                &mut cancel,
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let before = snapshot(&observed).descriptor;
+        resume_tx.send(()).unwrap();
+        worker.await.unwrap().unwrap();
+        let after = snapshot(&observed).descriptor;
+        server.abort();
+        let _ = server.await;
+        assert!(!before.device.valid && after.device.valid);
+        assert_eq!(after.device.rate_hz, Some(10.));
+        assert!(after.metadata_revision > before.metadata_revision);
+        assert_eq!(after.reference_epoch, before.reference_epoch);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_stream_after_reconnect_still_times_out() {
+        let config = Config {
+            source: Source::Usb {
+                port: "test-pty".into(),
+                baud: 115200,
+            },
+            mounting: Some(Mounting::parse("+x,+y,+z").unwrap()),
+            ..Config::default()
+        };
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let first_config = config.clone();
+        let first_shared = shared.clone();
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let (_tx, mut cancel) = watch::channel(false);
+        let first = tokio::spawn(async move {
+            let mut connection = Connection::Usb(host);
+            pump(
+                &first_config,
+                &first_shared,
+                &mut connection,
+                &mut None,
+                &mut cancel,
+            )
+            .await
+        });
+        let mut frame = [0u8; 20];
+        frame[..2].copy_from_slice(&[0x55, 0x61]);
+        device.write_all(&frame).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while lock(&shared).status.pose_count == 0 {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        drop(device);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), first)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+
+        begin_session(&shared);
+        assert_eq!(lock(&shared).status.frames_received, 1);
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let writer = tokio::spawn(async move {
+            loop {
+                device.write_all(&[0u8; 16]).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let mut connection = Connection::Usb(host);
+        let (_tx, mut cancel) = watch::channel(false);
+        let result = tokio::time::timeout(
+            Duration::from_secs(12),
+            pump(&config, &shared, &mut connection, &mut None, &mut cancel),
+        )
+        .await;
+        writer.abort();
+        let _ = writer.await;
+        assert!(matches!(result, Ok(Err(Error::Protocol(_)))), "{result:?}");
+        let s = snapshot(&shared);
+        assert_eq!(s.status.frames_received, 1);
+        assert_eq!(s.status.pose_count, 1);
+        assert_eq!(s.status.session_samples, 0);
+        assert!(s.status.bytes_received > frame.len() as u64);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
