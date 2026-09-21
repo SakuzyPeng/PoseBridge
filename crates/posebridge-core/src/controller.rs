@@ -1,10 +1,12 @@
 use crate::device::{self, Progress};
 use crate::model::*;
+use crate::motion::{History, Signals};
 use crate::osc::{Sender, Telemetry};
 use crate::pose;
 use crate::protocol::{self, Frame, Parser};
 use crate::sample_clock::SampleClock;
 use crate::transport::{self, Connection};
+use crate::{MotionBatch, MotionCursor, MotionSample, OrientationSource};
 use futures_util::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -24,6 +26,7 @@ struct Shared {
     devices: Vec<DeviceInfo>,
     last_pose: Option<Instant>,
     first_pose: Option<Instant>,
+    motion: History,
 }
 type SharedRef = Arc<Mutex<Shared>>;
 
@@ -109,6 +112,7 @@ impl Controller {
                 s.descriptor.device = old.device;
                 s.descriptor.device_name = old.device_name;
             }
+            s.motion = History::default();
             s.pose = None;
             s.last_pose = None;
             s.status = StatusSnapshot::default();
@@ -132,6 +136,7 @@ impl Controller {
             s.descriptor.instance_id = new_id();
             s.descriptor.session_id = 0;
             s.descriptor.metadata_revision += 1;
+            s.motion = History::default();
             s.pose = None;
             s.last_pose = None;
             s.first_pose = None;
@@ -313,6 +318,21 @@ impl Controller {
     pub fn status(&self) -> StatusSnapshot {
         self.snapshot().status
     }
+    /// Read all retained motion records after a cursor. A delivery is never split
+    /// by publication; no device/JSON/audio work occurs while copying the batch.
+    pub fn motion_since(&self, cursor: Option<MotionCursor>) -> MotionBatch {
+        let s = lock(&self.shared);
+        let now = Instant::now();
+        let mut batch = s.motion.since(cursor, now, fresh(&s, now));
+        batch.source_id = s.descriptor.source_id.clone();
+        if cursor.is_some_and(|c| {
+            c.instance_id != s.descriptor.instance_id || c.session_id != s.status.session_id
+        }) {
+            batch.reset = true;
+        }
+        batch
+    }
+
     pub fn latest_pose(&self) -> Option<PoseSnapshot> {
         self.snapshot().pose
     }
@@ -468,6 +488,7 @@ fn begin_session(shared: &SharedRef) {
         s.descriptor.reference_reason = "reconnected".into();
         s.descriptor.device.valid = false;
     }
+    s.motion = History::default();
     s.pose = None;
     s.last_pose = None;
     s.first_pose = None;
@@ -484,17 +505,43 @@ fn begin_session(shared: &SharedRef) {
     s.status.state = ConnectionState::Connecting;
 }
 
+struct PreparedPose {
+    q: pose::Quat,
+    raw: RawData,
+    time: Option<SampleTime>,
+    signals: Option<Signals>,
+}
+fn publish_batch(shared: &SharedRef, start: Instant, now: Instant, poses: Vec<PreparedPose>) {
+    let mut s = lock(shared);
+    s.motion.delivery += 1;
+    for p in poses {
+        if publish_locked(&mut s, p.q, &p.raw, start, now, p.time, p.signals).is_err() {
+            s.status.invalid_poses += 1;
+        }
+    }
+}
+#[cfg(test)]
 fn publish(
     shared: &SharedRef,
     q: pose::Quat,
     raw: &RawData,
     start: Instant,
     now: Instant,
+    time: Option<SampleTime>,
+) -> Result<()> {
+    publish_locked(&mut lock(shared), q, raw, start, now, time, None)
+}
+fn publish_locked(
+    s: &mut Shared,
+    q: pose::Quat,
+    raw: &RawData,
+    start: Instant,
+    now: Instant,
     sample_time: Option<SampleTime>,
+    signals: Option<Signals>,
 ) -> Result<()> {
     let q = pose::normalize(q)?;
     let euler = pose::to_euler(q)?;
-    let mut s = lock(shared);
     if let Some(last) = s.last_pose {
         let gap = now.duration_since(last).as_secs_f64() * 1000.0;
         if s.status.session_samples == 1 || gap < s.status.interval_min_ms {
@@ -527,6 +574,32 @@ fn publish(
         raw: raw.clone(),
         fresh: true,
     });
+    if let Some(signals) = signals {
+        s.motion.push(
+            now,
+            MotionSample {
+                source_id: s.descriptor.source_id.clone(),
+                cursor: MotionCursor {
+                    instance_id: s.descriptor.instance_id,
+                    session_id: s.status.session_id,
+                    sequence: s.status.session_samples,
+                },
+                reference_epoch: s.descriptor.reference_epoch,
+                metadata_revision: s.descriptor.metadata_revision,
+                delivery_id: s.motion.delivery,
+                received_ns: now.duration_since(start).as_nanos().min(i64::MAX as u128) as u64,
+                age_ns: 0,
+                fresh: true,
+                sample_time,
+                orientation_xyzw: signals.orientation,
+                euler_deg: euler,
+                angular_velocity_rad_s: signals.gyro,
+                acceleration_g: signals.acceleration,
+                orientation_source: signals.source,
+                profile: signals.profile,
+            },
+        );
+    }
     Ok(())
 }
 
@@ -559,6 +632,73 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
     }
 }
 
+fn simulated_angles(pattern: Pattern, mut angles: [f64; 3], t: f64) -> [f64; 3] {
+    match pattern {
+        Pattern::Fixed => {}
+        Pattern::Yaw => angles[0] += 45.0 * (t * std::f64::consts::TAU * 0.25).sin(),
+        Pattern::Combined => {
+            angles[0] += 45.0 * (t * 1.5).sin();
+            angles[1] += 20.0 * (t * 1.1).sin();
+            angles[2] += 15.0 * (t * 0.9).sin();
+        }
+        Pattern::Wrap => angles[0] = (170.0 + t * 20.0 + 180.0).rem_euclid(360.0) - 180.0,
+    }
+    angles
+}
+fn signals(
+    m: pose::Mounting,
+    q: Result<pose::Quat>,
+    gyro: Option<[f64; 3]>,
+    acc: Option<[f64; 3]>,
+    source: OrientationSource,
+    profile: u8,
+) -> Result<Signals> {
+    Ok(Signals {
+        orientation: q?,
+        gyro: gyro
+            .map(|v| m.vector(v).map(|v| v.map(f64::to_radians)))
+            .transpose()?,
+        acceleration: acc.map(|v| m.vector(v)).transpose()?,
+        source,
+        profile,
+    })
+}
+#[derive(Default)]
+struct FullFrameRate {
+    last: Option<u64>,
+    gaps: std::collections::VecDeque<u64>,
+}
+impl FullFrameRate {
+    fn observe(&mut self, profile: u8, time: Option<u64>) -> Result<()> {
+        if profile != 0xe4 {
+            *self = Self::default();
+            return Ok(());
+        }
+        let Some(time) = time else {
+            return Err(Error::Protocol("full inertial frame lacks a clock".into()));
+        };
+        if let Some(previous) = self.last {
+            if time < previous {
+                self.gaps.clear();
+            } else if time > previous {
+                if self.gaps.len() == 8 {
+                    self.gaps.pop_front();
+                }
+                self.gaps.push_back(time - previous);
+                if self.gaps.len() >= 4 {
+                    let mut sorted: Vec<_> = self.gaps.iter().copied().collect();
+                    sorted.sort_unstable();
+                    if !(45..=55).contains(&sorted[sorted.len() / 2]) {
+                        return Err(Error::Protocol("full inertial frames are outside the 20 Hz validation range; select a short profile".into()));
+                    }
+                }
+            }
+        }
+        self.last = Some(time);
+        Ok(())
+    }
+}
+
 async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool>) -> Result<()> {
     #[cfg(target_os = "windows")]
     let _timer_resolution = crate::timing::TimerResolution::for_config(&config)?;
@@ -583,15 +723,7 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
                     let now = Instant::now();
                     let elapsed = now.duration_since(start);
                     let t = elapsed.as_secs_f64();
-                    let mut angles = euler_deg;
-                    match pattern {
-                        Pattern::Fixed => {},
-                        Pattern::Yaw => angles[0] += 45.0*(t*std::f64::consts::TAU*0.25).sin(),
-                        Pattern::Combined => {
-                            angles[0] += 45.0*(t*1.5).sin(); angles[1] += 20.0*(t*1.1).sin(); angles[2] += 15.0*(t*0.9).sin();
-                        },
-                        Pattern::Wrap => angles[0] = (170.0 + t*20.0 + 180.0).rem_euclid(360.0)-180.0,
-                    }
+                    let angles = simulated_angles(pattern,euler_deg,t);
                     let sample_time = if sample_clock {
                         // A late tick followed by a prompt tick can share one millisecond.
                         // Do not manufacture a newer timestamp to disguise that duplicate.
@@ -605,7 +737,15 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
                         };
                         Some(time)
                     } else { None };
-                    publish(&shared,pose::from_euler(angles)?,&RawData::default(),start,now,sample_time)?;
+                    let physical = pose::physical_from_euler(angles)?;
+                    let next = pose::physical_from_euler(simulated_angles(pattern,euler_deg,t+0.0001))?;
+                    let [x,y,z,w]=physical;
+                    let delta=pose::multiply([-x,-y,-z,w],next);
+                    let gyro=std::array::from_fn(|i| delta[i]*2.0/0.0001);
+                    publish_batch(&shared,start,now,vec![PreparedPose {
+                        q:pose::from_euler(angles)?,raw:RawData::default(),time:sample_time,
+                        signals:Some(Signals {orientation:physical,gyro:Some(gyro),acceleration:None,source:OrientationSource::Simulator,profile:0}),
+                    }]);
                     emit(&shared,&mut sender)?;
                 },
                 _ = wait_for_deadline(output_deadline) => emit(&shared,&mut sender)?,
@@ -680,6 +820,7 @@ async fn pump(
     let mut received_frame = false;
     let mut raw = RawData::default();
     let mut sample_clock = SampleClock::default();
+    let mut full_frame_rate = FullFrameRate::default();
     let mounting = config
         .mounting
         .ok_or_else(|| Error::Invalid("mounting required".into()))?;
@@ -718,18 +859,24 @@ async fn pump(
                     }
                     last_delivery = Some(last_bytes);
                 }
+                let mut prepared = Vec::new();
                 for frame in frames {
                     lock(shared).status.frames_received += 1;
                     let mut sample_time_ms = None;
+                    let mut coherent = None;
                     let q = match frame {
                         Frame::Motion { acceleration_g,angular_velocity_dps,euler_xyz_deg } => {
                             raw.acceleration_g=Some(acceleration_g);raw.angular_velocity_dps=Some(angular_velocity_dps);
                             raw.euler_xyz_deg=Some(euler_xyz_deg);raw.motion_received_ns=Some(ns);
-                            if config.pose_input==PoseInput::Euler { Some(mounting.from_sensor_euler(euler_xyz_deg)) } else { None }
+                            if config.pose_input==PoseInput::Euler {
+                                coherent=Some(signals(mounting,mounting.physical_from_sensor_euler(euler_xyz_deg),Some(angular_velocity_dps),Some(acceleration_g),OrientationSource::ConvertedEuler,0x61));
+                                Some(mounting.from_sensor_euler(euler_xyz_deg))
+                            } else { None }
                         },
-                        Frame::Stream { sample_time_ms: time, angular_velocity_dps, euler_xyz_deg, quaternion_wxyz } => {
+                        Frame::Stream { profile: flag, acceleration_g, sample_time_ms: time, angular_velocity_dps, euler_xyz_deg, quaternion_wxyz } => {
                             // Partial stream groups must not retain old fields under a new host timestamp.
-                            raw.acceleration_g = None;
+                            full_frame_rate.observe(flag,time)?;
+                            raw.acceleration_g = acceleration_g;
                             raw.angular_velocity_dps = angular_velocity_dps;
                             raw.euler_xyz_deg = euler_xyz_deg;
                             raw.motion_received_ns = (angular_velocity_dps.is_some() || euler_xyz_deg.is_some()).then_some(ns);
@@ -739,8 +886,14 @@ async fn pump(
                             }
                             sample_time_ms = time;
                             match config.pose_input {
-                                PoseInput::Euler => euler_xyz_deg.map(|e| mounting.from_sensor_euler(e)),
-                                PoseInput::StreamQuaternion => quaternion_wxyz.map(|[w,x,y,z]| mounting.from_sensor_quaternion([x,y,z,w])),
+                                PoseInput::Euler => euler_xyz_deg.map(|e| {
+                                    coherent=Some(signals(mounting,mounting.physical_from_sensor_euler(e),angular_velocity_dps,acceleration_g,OrientationSource::ConvertedEuler,flag));
+                                    mounting.from_sensor_euler(e)
+                                }),
+                                PoseInput::StreamQuaternion => quaternion_wxyz.map(|[w,x,y,z]| {
+                                    coherent=Some(signals(mounting,mounting.physical_from_sensor_quaternion([x,y,z,w]),angular_velocity_dps,acceleration_g,OrientationSource::NativeQuaternion,flag));
+                                    mounting.from_sensor_quaternion([x,y,z,w])
+                                }),
                                 PoseInput::Quaternion => None,
                             }
                         },
@@ -748,7 +901,10 @@ async fn pump(
                             outstanding=None;
                             let q = [values[0],values[1],values[2],values[3]].map(|v| v as f64/32768.0);
                             raw.quaternion_wxyz=Some(q);raw.quaternion_received_ns=Some(ns);
-                            if config.pose_input==PoseInput::Quaternion { Some(mounting.from_sensor_quaternion([q[1],q[2],q[3],q[0]])) } else { None }
+                            if config.pose_input==PoseInput::Quaternion {
+                                coherent=Some(signals(mounting,mounting.physical_from_sensor_quaternion([q[1],q[2],q[3],q[0]]),None,None,OrientationSource::RegisterQuaternion,0x71));
+                                Some(mounting.from_sensor_quaternion([q[1],q[2],q[3],q[0]]))
+                            } else { None }
                         },
                         _ => None,
                     };
@@ -764,8 +920,9 @@ async fn pump(
                                     lock(shared).status.clock_discontinuities += sample_clock.discontinuities - old_discontinuities;
                                     Some(time)
                                 } else { None };
-                                if publish(shared,q,&raw,start,last_bytes,sample_time).is_err() {
-                                    lock(shared).status.invalid_poses += 1;
+                                match coherent.transpose() {
+                                    Ok(signals) => prepared.push(PreparedPose { q,raw:raw.clone(),time:sample_time,signals }),
+                                    Err(_) => lock(shared).status.invalid_poses += 1,
                                 }
                             },
                             Err(_) => lock(shared).status.invalid_poses+=1,
@@ -777,6 +934,7 @@ async fn pump(
                     state.status.discarded_bytes += parser.discarded_bytes - old_discarded;
                     state.status.invalid_frames += parser.invalid_frames - old_invalid;
                 }
+                publish_batch(shared,start,last_bytes,prepared);
                 emit(shared,sender)?;
             },
             _ = wait_for_deadline(output_deadline) => emit(shared,sender)?,
@@ -1069,6 +1227,46 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn experimental_output_rejects_unsupported_rate_before_any_write() {
+        let (mut connection, commands, server) = fake_device(0).await;
+        let (_tx, mut cancel) = watch::channel(false);
+        let output = DeviceCommand::Output {
+            format: OutputProfile::ExperimentalFullInertial20Hz,
+        };
+        assert!(
+            device::execute(&mut connection, &output, &mut cancel, |_| {})
+                .await
+                .is_err()
+        );
+        assert!(commands.lock().unwrap().iter().all(|c| c[2] == 0x27));
+        device::execute(
+            &mut connection,
+            &DeviceCommand::Rate { hz: 20 },
+            &mut cancel,
+            |_| {},
+        )
+        .await
+        .unwrap();
+        device::execute(&mut connection, &output, &mut cancel, |_| {})
+            .await
+            .unwrap();
+        commands.lock().unwrap().clear();
+        assert!(
+            device::execute(
+                &mut connection,
+                &DeviceCommand::Rate { hz: 100 },
+                &mut cancel,
+                |_| {}
+            )
+            .await
+            .is_err()
+        );
+        assert!(commands.lock().unwrap().iter().all(|c| c[2] == 0x27));
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_after_write_invalidates_reference_without_repeating_write() {
         let (mut device, host) = SerialStream::pair().unwrap();
         let mut connection = Connection::Usb(host);
@@ -1089,6 +1287,11 @@ mod tests {
             .await
         });
         let mut bytes = [0u8; 5];
+        device.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, protocol::read_register(0x0e));
+        let mut reply = [0u8; 20];
+        reply[..6].copy_from_slice(&[0x55, 0x71, 0x0e, 0, 0x61, 0]);
+        device.write_all(&reply).await.unwrap();
         device.read_exact(&mut bytes).await.unwrap();
         assert_eq!(bytes, protocol::UNLOCK);
         device.read_exact(&mut bytes).await.unwrap();
@@ -1368,18 +1571,43 @@ mod tests {
         let mut response = [0u8; 20];
         response[..4].copy_from_slice(&[0x55, 0x71, 0x51, 0]);
         response[4..6].copy_from_slice(&32767i16.to_le_bytes());
-        // A timestamp in a preceding stream frame must not be cached onto a register reply.
+        // Same read, but different frames: even an identical host receipt time
+        // cannot associate stream gyro/timestamp with a register quaternion.
+        let stream = [
+            0x55, 0xa4, 15, 1, 1, 0, 0, 0, 5, 0, 1, 0, 2, 0, 3, 0, 0xff, 0x7f, 0, 0, 0, 0, 0, 0,
+        ];
         device
-            .write_all(&[0x55, 0x81, 15, 1, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0])
+            .write_all(&[stream.as_slice(), response.as_slice()].concat())
             .await
             .unwrap();
-        device.write_all(&response).await.unwrap();
         tokio::time::timeout(Duration::from_millis(200), device.read_exact(&mut command))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(lock(&observed).status.pose_count, 1);
         assert!(lock(&observed).pose.as_ref().unwrap().sample_time.is_none());
+        {
+            let state = lock(&observed);
+            let batch = state.motion.since(None, Instant::now(), true);
+            assert_eq!(batch.samples.len(), 1);
+            let sample = &batch.samples[0];
+            assert_eq!(
+                sample.orientation_source,
+                OrientationSource::RegisterQuaternion
+            );
+            assert!(sample.sample_time.is_none());
+            assert!(sample.angular_velocity_rad_s.is_none());
+            assert!(sample.acceleration_g.is_none());
+            assert!(
+                state
+                    .pose
+                    .as_ref()
+                    .unwrap()
+                    .raw
+                    .angular_velocity_dps
+                    .is_some()
+            );
+        }
         assert!(fresh(&lock(&observed), Instant::now()));
         tx.send(true).unwrap();
         assert!(matches!(
@@ -1583,6 +1811,12 @@ mod tests {
                 while device.read_exact(&mut bytes).await.is_ok() {
                     seen.lock().unwrap().push(bytes);
                     if bytes[2] == 0x27 {
+                        if bytes[3] == 0x0e {
+                            let mut reply = [0u8; 20];
+                            reply[..6].copy_from_slice(&[0x55, 0x71, 0x0e, 0, 0x61, 0]);
+                            device.write_all(&reply).await.unwrap();
+                            continue;
+                        }
                         reads += 1;
                         assert_eq!(bytes[3], address);
                         let observed = if wrong {
@@ -1604,13 +1838,72 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert_eq!(result.is_err(), wrong, "{result:?}");
             let sent = commands.lock().unwrap().clone();
-            assert_eq!(sent[0], protocol::UNLOCK);
-            assert_eq!(sent[1], protocol::write_register(address, value));
+            let writes: Vec<_> = sent.iter().filter(|c| c[2] != 0x27).copied().collect();
+            assert_eq!(writes[0], protocol::UNLOCK);
+            assert_eq!(writes[1], protocol::write_register(address, value));
             if address != 0 {
                 assert!(sent.iter().all(|c| c[2] != 0), "implicit SAVE");
             }
             server.abort();
             let _ = server.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    #[test]
+    fn batch_is_atomic_and_coherent_fields_do_not_use_legacy_cache() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let now = Instant::now();
+        let input = |gyro| PreparedPose {
+            q: [0., 0., 0., 1.],
+            raw: RawData {
+                angular_velocity_dps: Some([999.; 3]),
+                ..RawData::default()
+            },
+            time: None,
+            signals: Some(Signals {
+                orientation: [0., 0., 0., 1.],
+                gyro,
+                acceleration: None,
+                source: OrientationSource::NativeQuaternion,
+                profile: 0xa4,
+            }),
+        };
+        publish_batch(
+            &shared,
+            now,
+            now,
+            vec![input(Some([1., 2., 3.])), input(None)],
+        );
+        let state = lock(&shared);
+        let b = state.motion.since(None, now, true);
+        assert_eq!(b.samples.len(), 2);
+        assert_eq!(b.samples[0].delivery_id, b.samples[1].delivery_id);
+        assert_eq!(b.samples[0].angular_velocity_rad_s, Some([1., 2., 3.]));
+        assert_eq!(b.samples[1].angular_velocity_rad_s, None);
+        assert_eq!(
+            state.pose.as_ref().unwrap().sequence,
+            b.cursor.unwrap().sequence
+        );
+        assert_eq!(
+            state.pose.as_ref().unwrap().raw.angular_velocity_dps,
+            Some([999.; 3])
+        );
+    }
+    #[test]
+    fn full_frame_guard_refuses_high_rate_and_allows_clock_restart() {
+        let mut rate = FullFrameRate::default();
+        for t in [0, 50, 100, 150, 200, 250] {
+            rate.observe(0xe4, Some(t)).unwrap();
+        }
+        rate.observe(0xe4, Some(0)).unwrap();
+        for t in [5, 10, 15] {
+            rate.observe(0xe4, Some(t)).unwrap();
+        }
+        assert!(rate.observe(0xe4, Some(20)).is_err());
     }
 }

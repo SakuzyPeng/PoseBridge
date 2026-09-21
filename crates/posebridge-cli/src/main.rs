@@ -62,6 +62,8 @@ enum Profile {
     TimestampEuler,
     TimestampQuaternion,
     TimestampGyroQuaternion,
+    #[value(name = "experimental-full-inertial-20hz")]
+    ExperimentalFullInertial20Hz,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Trajectory {
@@ -494,6 +496,9 @@ fn run() -> Result<()> {
                         Profile::TimestampEuler => OutputProfile::TimestampEuler,
                         Profile::TimestampQuaternion => OutputProfile::TimestampQuaternion,
                         Profile::TimestampGyroQuaternion => OutputProfile::TimestampGyroQuaternion,
+                        Profile::ExperimentalFullInertial20Hz => {
+                            OutputProfile::ExperimentalFullInertial20Hz
+                        }
                     },
                 },
                 ConfigureAction::AccelCalibrate => DeviceCommand::AccelCalibrate,

@@ -371,6 +371,9 @@ pub enum OutputProfile {
     TimestampEuler = 0x81,
     TimestampQuaternion = 0x84,
     TimestampGyroQuaternion = 0xa4,
+    /// Candidate 30-byte profile. Only 20 Hz; not a validated default preset.
+    #[serde(rename = "experimental_full_inertial_20hz")]
+    ExperimentalFullInertial20Hz = 0xe4,
 }
 
 pub const PROTOCOL_VERSION: u32 = 3;

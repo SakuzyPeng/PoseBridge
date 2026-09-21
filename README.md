@@ -15,6 +15,8 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 当前 OSC 协议为 3，C ABI 为 400，本地 JSON 快照 schema 为 4。快照提供查询时的 `age_ns`，方便消费方设置时效阈值。
 只支持当前接口；旧地址、旧结构和 `--osc-version` 已移除，C 调用方须同步升级头文件与动态库。
 
+Rust 0.5 新增[同帧运动批次接口](docs/motion.md)：物理四元数、角速度、加速度与设备时间戳；C ABI 400、OSC 3 及 JSON schema 4 保持原布局。
+
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
 macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。
 

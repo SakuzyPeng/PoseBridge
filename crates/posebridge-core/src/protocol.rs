@@ -10,6 +10,8 @@ pub enum Frame {
         euler_xyz_deg: [f64; 3],
     },
     Stream {
+        profile: u8,
+        acceleration_g: Option<[f64; 3]>,
         sample_time_ms: Option<u64>,
         angular_velocity_dps: Option<[f64; 3]>,
         euler_xyz_deg: Option<[f64; 3]>,
@@ -72,6 +74,7 @@ fn frame_length(flag: u8) -> Option<usize> {
         0x81 => Some(16),
         0x84 => Some(18),
         0xa4 => Some(24),
+        0xe4 => Some(30),
         _ => None,
     }
 }
@@ -99,6 +102,13 @@ fn decode(b: &[u8]) -> Option<Frame> {
     } else {
         None
     };
+    let acceleration_g = if b[1] & 0x40 != 0 {
+        let values = triple(offset, 16.0);
+        offset += 6;
+        Some(values)
+    } else {
+        None
+    };
     let angular_velocity_dps = if b[1] & 0x20 != 0 {
         let values = triple(offset, 2000.0);
         offset += 6;
@@ -119,6 +129,8 @@ fn decode(b: &[u8]) -> Option<Frame> {
         None
     };
     Some(Frame::Stream {
+        profile: b[1],
+        acceleration_g,
         sample_time_ms,
         angular_velocity_dps,
         euler_xyz_deg,
@@ -136,7 +148,7 @@ pub struct Parser {
 impl Parser {
     pub fn push(&mut self, bytes: &[u8]) -> Vec<Frame> {
         let mut frames = Vec::new();
-        // Byte-wise ingestion keeps the incomplete-frame buffer bounded to 24 bytes.
+        // Byte-wise ingestion keeps the incomplete-frame buffer bounded to 30 bytes.
         for byte in bytes {
             self.buffer.push_back(*byte);
             while self.buffer.len() >= 2 {

@@ -1,4 +1,6 @@
-# PoseBridge C ABI 0.4（experimental）
+# PoseBridge C ABI 400（experimental）
+
+Rust 包 0.5 沿用 0.4 的 C ABI 400，结构布局与 OSC 3 均不变。新运动批次接口仅供 Rust 进程内消费者。
 
 头文件 [posebridge.h](../include/posebridge.h) 由 cbindgen 生成；`pb_abi_version()` 必须等于 **400**。
 0.4 在 `PbPose` 中加入 `age_ns`，不保留 ABI 300 布局。源码、头文件和动态库一起升级并重新编译调用方；

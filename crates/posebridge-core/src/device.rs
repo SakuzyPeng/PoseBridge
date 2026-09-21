@@ -96,6 +96,12 @@ pub(crate) async fn inspect(
             0x81 => Some(vec!["sample_time", "euler"]),
             0x84 => Some(vec!["sample_time", "quaternion"]),
             0xa4 => Some(vec!["sample_time", "angular_velocity", "quaternion"]),
+            0xe4 => Some(vec![
+                "sample_time",
+                "acceleration",
+                "angular_velocity",
+                "quaternion",
+            ]),
             _ => None,
         }
         .map(|items| items.into_iter().map(str::to_string).collect()),
@@ -131,10 +137,29 @@ pub(crate) async fn execute(
     let (address, value) = protocol::command_register(command)?;
     if matches!(
         command,
+        DeviceCommand::Output {
+            format: OutputProfile::ExperimentalFullInertial20Hz
+        }
+    ) && read_registers(connection, 0x03, None, cancel).await?[0] != 7
+    {
+        return Err(Error::Invalid(
+            "experimental full inertial output requires a verified 20 Hz rate".into(),
+        ));
+    }
+    if matches!(command, DeviceCommand::Rate { hz } if *hz != 20)
+        && read_registers(connection, 0x0e, None, cancel).await?[0] == 0xe4
+    {
+        return Err(Error::Invalid(
+            "switch to a short output profile before leaving 20 Hz".into(),
+        ));
+    }
+
+    if matches!(
+        command,
         DeviceCommand::Output { .. } | DeviceCommand::ResetDefaults
     ) {
         let current = read_registers(connection, 0x0e, None, cancel).await?[0];
-        if !matches!(current, 0x61 | 0x81 | 0x84 | 0xa4) {
+        if !matches!(current, 0x61 | 0x81 | 0x84 | 0xa4 | 0xe4) {
             return Err(Error::Protocol(format!(
                 "operation requires verified new-format firmware (0x0E=0x{current:04x})"
             )));

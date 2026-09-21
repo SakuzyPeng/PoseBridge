@@ -149,6 +149,30 @@ impl Mounting {
         m
     }
 
+    /// Re-express a vector in physical head X-right/Y-forward/Z-up axes.
+    pub fn vector(self, sensor: [f64; 3]) -> Result<[f64; 3]> {
+        self.validate()?;
+        if sensor.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Invalid("non-finite motion vector".into()));
+        }
+        Ok([self.right, self.forward, self.up].map(|axis| {
+            sensor[axis.unsigned_abs() as usize - 1] * if axis < 0 { -1.0 } else { 1.0 }
+        }))
+    }
+    /// For a proper rotation M, conjugation M R M^T maps the quaternion vector
+    /// by M while preserving its scalar. This returns a PHYSICAL quaternion.
+    pub fn physical_from_sensor_quaternion(self, sensor: Quat) -> Result<Quat> {
+        let [x, y, z, w] = normalize(sensor)?;
+        let [x, y, z] = self.vector([x, y, z])?;
+        Ok([x, y, z, w])
+    }
+    pub fn physical_from_sensor_euler(self, [x, y, z]: [f64; 3]) -> Result<Quat> {
+        if [x, y, z].iter().any(|v| !v.is_finite() || v.abs() > 180.01) {
+            return Err(Error::Protocol("invalid sensor Euler angles".into()));
+        }
+        self.physical_from_sensor_quaternion(multiply(multiply(axis(2, z), axis(1, y)), axis(0, x)))
+    }
+
     /// WIT Euler XYZ is interpreted as Rz(Z) Ry(Y) Rx(X), then rotated as a full orientation.
     pub fn from_sensor_euler(self, [x, y, z]: [f64; 3]) -> Result<Quat> {
         if [x, y, z].iter().any(|v| !v.is_finite() || v.abs() > 180.01) {
@@ -201,4 +225,15 @@ impl Mounting {
         };
         from_euler([yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees()])
     }
+}
+
+/// Physical ZXY pose, distinct from the OSC/GUI YXZ representation.
+pub fn physical_from_euler([yaw, pitch, roll]: [f64; 3]) -> Result<Quat> {
+    if [yaw, pitch, roll].iter().any(|v| !v.is_finite()) {
+        return Err(Error::Invalid("non-finite Euler angles".into()));
+    }
+    normalize(multiply(
+        multiply(axis(2, yaw), axis(0, pitch)),
+        axis(1, roll),
+    ))
 }

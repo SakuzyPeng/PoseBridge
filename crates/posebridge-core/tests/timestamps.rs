@@ -95,6 +95,7 @@ fn variable_profiles_split_coalesced_invalid_and_resynchronized() {
                 angular_velocity_dps,
                 euler_xyz_deg,
                 quaternion_wxyz,
+                ..
             } = frames[0]
             else {
                 panic!("stream")

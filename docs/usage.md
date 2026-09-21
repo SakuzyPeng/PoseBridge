@@ -1,6 +1,6 @@
 # PoseBridge 使用指南
 
-PoseBridge 0.4 为维特 BWT901BLECL5.0 提供 BLE／USB 采集、安装转换、当前 OSC 协议和实验 C ABI。
+PoseBridge 0.5 为维特 BWT901BLECL5.0 提供 BLE／USB 采集、安装转换、当前 OSC 协议和实验 C ABI。
 只保留一套当前接口；旧版调用方须同步升级。MacinRender 提供原生接收器，GUI 尚未适配。
 
 ## 构建
