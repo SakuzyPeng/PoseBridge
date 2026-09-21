@@ -28,6 +28,11 @@ stop 幂等并释放连接；destroy 消耗句柄且允许 NULL。start 成功�
   此版本与 OSC 独立：OSC 仍为协议 3，info/status 的 schema 仍为 3。
 - `pb_devices_json`：读取 scan 的设备列表；`pb_error_copy`：读取上次同步 API 错误。
 
+电压／估算电量通过 `pb_snapshot_json` 的 `status.battery` 读取；`PbStatus` 大小与 ABI 400 保持不变。
+`pb_inspect_start` 查询一次，硬件采集期间自动每 30 秒查询，快照函数本身不执行设备 I/O。
+数值可能为 null，必须检查 `fresh` 与 `last_error`；`age_ns` 是独立于姿态的十进制纳秒字符串。
+供电电压超过 4.30 V 时百分比为 null，不能将 USB 供电读数当成满电；详见[电量说明](usage.md#电压与估算电量)。
+
 字符串使用调用方缓冲区；required 包含 NUL。NULL＋capacity=0 可查询长度，返回 PB_BUFFER_TOO_SMALL。
 快照可能变化，需处理第二次容量不足。首次姿态前返回 PB_NO_DATA；陈旧或停止后的最后姿态仍可读，fresh=0。
 raw_flags：bit0 完整运动组，bit1 原始四元数，bit2/3/4 分别为 Euler／加速度／角速度存在。
@@ -72,7 +77,7 @@ outcome 为 running/succeeded/unverified/failed/cancelled；连接状态 complet
 同一上下文保留上次操作；跨进程未观察到的操作不猜测原因。
 
 描述中的 device 是带 observed_unix_ms 与 valid 标记的缓存，提供原始寄存器及已知的速率、模式、字段集合和固件显示值。
-valid 表示成功读取且未被本上下文已知的变化作废，不保证其他程序从未修改设备。采集期间不自动刷新寄存器。
+valid 表示成功读取且未被本上下文已知的变化作废，不保证其他程序从未修改设备。采集期间不自动刷新配置寄存器；电压单独低频更新。
 
 ## 结果与边界
 

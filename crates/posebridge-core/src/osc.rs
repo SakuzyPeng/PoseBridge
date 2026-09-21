@@ -462,6 +462,10 @@ mod telemetry_tests {
             let json: serde_json::Value = serde_json::from_str(body).unwrap();
             assert_eq!(json["schema"], 3);
             assert_eq!(json["message_seq"], "1");
+            if address == STATUS_ADDRESS {
+                assert!(json["status"]["battery"]["voltage_v"].is_null());
+                assert_eq!(json["status"]["battery"]["fresh"], false);
+            }
         }
         assert_eq!(
             telemetry
@@ -470,13 +474,29 @@ mod telemetry_tests {
             0
         );
         s.status.state = crate::ConnectionState::Stale;
+        s.status.battery = crate::BatteryStatus {
+            raw_register: Some(382),
+            voltage_v: Some(3.82),
+            estimated_percent: Some(60),
+            age_ns: Some(1_000_000_000),
+            fresh: true,
+            last_error: None,
+        };
         assert_eq!(
             telemetry
                 .refresh(&s, false, start + Duration::from_millis(600))
                 .unwrap(),
             1
         );
-        assert_eq!(receive().addr, STATUS_ADDRESS);
+        let message = receive();
+        assert_eq!(message.addr, STATUS_ADDRESS);
+        let OscType::String(body) = &message.args[0] else {
+            panic!("JSON")
+        };
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["status"]["battery"]["voltage_v"], 3.82);
+        assert_eq!(json["status"]["battery"]["estimated_percent"], 60);
+        assert_eq!(json["status"]["battery"]["age_ns"], "1000000000");
         assert_eq!(
             telemetry
                 .refresh(&s, false, start + Duration::from_secs(5))

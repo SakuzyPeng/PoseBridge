@@ -9,6 +9,7 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 
 - BLE 无线与 USB 串口采集，共用数据解析和姿态转换。
 - 设备扫描、只读配置检查、显式设备控制与断线重连。
+- 电压与估算电量查询；采集时每 30 秒更新，通过 CLI、JSON 快照与 OSC 状态心跳提供。
 - 四元数／欧拉角 OSC 输出、时间戳、来源描述与独立状态心跳，以及无设备模拟器。
 - Rust 核心库、CLI、实验性 C ABI 0.4（版本 400），以及可运行的 C11 消费示例。
 

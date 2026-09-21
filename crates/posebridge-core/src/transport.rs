@@ -8,7 +8,7 @@ use futures_util::{Stream, StreamExt};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::watch;
 use tokio_serial::{
     DataBits, FlowControl, Parity, SerialPortBuilderExt, SerialPortType, SerialStream, StopBits,
@@ -131,6 +131,23 @@ pub(crate) enum Connection {
         writer: Option<Characteristic>,
         stream: Pin<Box<dyn Stream<Item = ValueNotification> + Send>>,
         link: Option<crate::ble_link::Link>,
+    },
+}
+
+pub(crate) enum Reader<'a> {
+    Usb(ReadHalf<&'a mut SerialStream>),
+    Ble {
+        notify: &'a Characteristic,
+        stream: &'a mut Pin<Box<dyn Stream<Item = ValueNotification> + Send>>,
+        link: &'a Option<crate::ble_link::Link>,
+    },
+}
+
+pub(crate) enum Writer<'a> {
+    Usb(WriteHalf<&'a mut SerialStream>),
+    Ble {
+        peripheral: &'a Peripheral,
+        writer: Option<&'a Characteristic>,
     },
 }
 
@@ -258,6 +275,60 @@ impl Connection {
         }
     }
 
+    /// Keep notification/serial reception running while a read request is being
+    /// written. In particular a slow optional battery write must not stall poses.
+    pub(crate) fn split(&mut self) -> (Reader<'_>, Writer<'_>) {
+        match self {
+            Self::Usb(stream) => {
+                let (reader, writer) = tokio::io::split(stream);
+                (Reader::Usb(reader), Writer::Usb(writer))
+            }
+            Self::Ble {
+                peripheral,
+                notify,
+                writer,
+                stream,
+                link,
+            } => (
+                Reader::Ble {
+                    notify,
+                    stream,
+                    link,
+                },
+                Writer::Ble {
+                    peripheral,
+                    writer: writer.as_ref(),
+                },
+            ),
+        }
+    }
+
+    pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
+        self.split().0.read().await
+    }
+
+    pub(crate) async fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.split().1.write(bytes).await
+    }
+
+    pub(crate) async fn close(&mut self) {
+        if let Self::Ble {
+            peripheral,
+            notify,
+            link,
+            ..
+        } = self
+        {
+            // Release any native connection preference before disconnecting.
+            *link = None;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), peripheral.unsubscribe(notify)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), peripheral.disconnect()).await;
+        }
+    }
+}
+
+impl Reader<'_> {
     pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
         match self {
             Self::Usb(stream) => {
@@ -280,6 +351,15 @@ impl Connection {
         }
     }
 
+    pub(crate) fn link_status(&self) -> Option<crate::BleLinkStatus> {
+        match self {
+            Self::Ble { link, .. } => link.as_ref().map(crate::ble_link::Link::status),
+            Self::Usb(_) => None,
+        }
+    }
+}
+
+impl Writer<'_> {
     pub(crate) async fn write(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
             Self::Usb(stream) => {
@@ -305,29 +385,6 @@ impl Connection {
                     .await
                     .map_err(ble_error)
             }
-        }
-    }
-
-    pub(crate) fn link_status(&self) -> Option<crate::BleLinkStatus> {
-        match self {
-            Self::Ble { link, .. } => link.as_ref().map(crate::ble_link::Link::status),
-            Self::Usb(_) => None,
-        }
-    }
-
-    pub(crate) async fn close(&mut self) {
-        if let Self::Ble {
-            peripheral,
-            notify,
-            link,
-            ..
-        } = self
-        {
-            // Release any native connection preference before disconnecting.
-            *link = None;
-            let _ =
-                tokio::time::timeout(Duration::from_secs(1), peripheral.unsubscribe(notify)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(1), peripheral.disconnect()).await;
         }
     }
 }

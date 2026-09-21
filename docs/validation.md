@@ -1,5 +1,7 @@
 # 当前验证入口
 
+电压／估算电量的双平台软件检查、USB／BLE 实机读取与供电读数限制见[电量验证记录](measurements/2026-09-21-battery.md)。
+
 PoseBridge 0.5 的同帧运动接口、双平台构建与兼容检查见 [0.5 验证记录](measurements/2026-09-21-motion-api.md)。
 E4 的 20 Hz 实机门槛未完成，完整帧保持实验状态。
 

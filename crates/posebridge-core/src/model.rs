@@ -48,7 +48,7 @@ pub enum PoseInput {
     #[default]
     Euler,
     Quaternion,
-    /// Native notification quaternion, without register polling.
+    /// Native notification quaternion, without quaternion register polling.
     StreamQuaternion,
 }
 
@@ -306,6 +306,22 @@ pub struct BleLinkStatus {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+pub struct BatteryStatus {
+    /// Last valid register 0x64 value, in centivolts; null until observed.
+    pub raw_register: Option<u16>,
+    pub voltage_v: Option<f64>,
+    /// Coarse WIT BLE 5.0 voltage estimate; null above 4.30 V (possible supply
+    /// voltage), or before a valid reading. Does not indicate charging state.
+    pub estimated_percent: Option<u8>,
+    /// Host elapsed time since the last valid response, independent of pose age.
+    #[serde(serialize_with = "optional_decimal::serialize")]
+    pub age_ns: Option<u64>,
+    pub fresh: bool,
+    /// Battery query failures do not fail orientation acquisition.
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct StatusSnapshot {
     pub state: ConnectionState,
     #[serde(serialize_with = "decimal::serialize")]
@@ -345,6 +361,7 @@ pub struct StatusSnapshot {
     pub configuration_report: Option<String>,
     pub delivery: DeliveryStats,
     pub ble_link: Option<BleLinkStatus>,
+    pub battery: BatteryStatus,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -489,6 +506,7 @@ impl SourceDescriptor {
             calibration_quality: None,
             software_capabilities: [
                 "inspect",
+                "battery",
                 "rate",
                 "output",
                 "algorithm",

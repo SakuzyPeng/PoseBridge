@@ -1,3 +1,4 @@
+use crate::battery::{self, Battery};
 use crate::device::{self, Progress};
 use crate::model::*;
 use crate::motion::{History, Signals};
@@ -7,7 +8,7 @@ use crate::protocol::{self, Frame, Parser};
 use crate::sample_clock::SampleClock;
 use crate::transport::{self, Connection};
 use crate::{MotionBatch, MotionCursor, MotionSample, OrientationSource};
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -27,6 +28,7 @@ struct Shared {
     last_pose: Option<Instant>,
     first_pose: Option<Instant>,
     motion: History,
+    battery: Battery,
 }
 type SharedRef = Arc<Mutex<Shared>>;
 
@@ -116,6 +118,7 @@ impl Controller {
             s.pose = None;
             s.last_pose = None;
             s.status = StatusSnapshot::default();
+            s.battery = Battery::default();
         }
         self.config = config;
         Ok(())
@@ -132,6 +135,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.status = StatusSnapshot::default();
+            s.battery = Battery::default();
             s.status.state = ConnectionState::Connecting;
             s.descriptor.instance_id = new_id();
             s.descriptor.session_id = 0;
@@ -155,6 +159,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.devices.clear();
+            s.battery = Battery::default();
             s.status.state = ConnectionState::Scanning;
         }
         self.launch(None, move |shared, mut cancel| async move {
@@ -178,6 +183,7 @@ impl Controller {
             s.status.state = ConnectionState::Inspecting;
             s.status.last_error = None;
             s.status.configuration_report = None;
+            s.battery = Battery::default();
             s.descriptor.device.valid = false;
             s.descriptor.metadata_revision += 1;
             let mut operation = OperationStatus::new("inspect".into());
@@ -187,10 +193,20 @@ impl Controller {
         self.launch(None, move |shared, mut cancel| async move {
             let mut connection = Connection::open(&source, &mut cancel).await?;
             let name = connection.device_name(&source).await;
-            let result = device::inspect(&mut connection, &mut cancel).await;
+            let result = async {
+                let observation = device::inspect(&mut connection, &mut cancel).await?;
+                let mut battery = Battery::default();
+                match device::read_registers(&mut connection, battery::REGISTER, None, &mut cancel).await {
+                    Ok(values) => battery.observe(values[0], Instant::now()),
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(error) => battery.fail(error.to_string()),
+                }
+                Ok((observation, battery))
+            }.await;
             connection.close().await;
-            let observation = result?;
+            let (observation, battery) = result?;
             let mut s = lock(&shared);
+            s.battery = battery;
             s.descriptor.device = observation;
             s.descriptor.device_name = name;
             s.descriptor.metadata_revision += 1;
@@ -219,6 +235,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.status.state = ConnectionState::Configuring;
+            s.battery = Battery::default();
             s.status.last_error = None;
             s.status.configuration_report = None;
             let mut operation = OperationStatus::new(action);
@@ -452,6 +469,16 @@ fn pose_at(s: &Shared, now: Instant) -> Option<PoseSnapshot> {
 fn snapshot_at(s: &Shared, now: Instant) -> Snapshot {
     let is_fresh = fresh(s, now);
     let mut status = s.status.clone();
+    status.battery = s.battery.snapshot(
+        now,
+        matches!(
+            status.state,
+            ConnectionState::Connecting
+                | ConnectionState::Active
+                | ConnectionState::Stale
+                | ConnectionState::Complete
+        ),
+    );
     if status.state == ConnectionState::Active && !is_fresh {
         status.state = ConnectionState::Stale;
     }
@@ -489,6 +516,7 @@ fn begin_session(shared: &SharedRef) {
         s.descriptor.device.valid = false;
     }
     s.motion = History::default();
+    s.battery = Battery::default();
     s.pose = None;
     s.last_pose = None;
     s.first_pose = None;
@@ -811,10 +839,33 @@ async fn pump(
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<()> {
     let start = Instant::now();
+    let (mut reader, writer) = connection.split();
+    // A bounded serial writer is polled alongside reception. Dropping pump also
+    // drops an in-progress write; no detached task can outlive the connection.
+    let (requests, request_rx) = tokio::sync::mpsc::channel::<u16>(1);
+    let writes =
+        futures_util::stream::unfold((writer, request_rx), |(mut writer, mut rx)| async move {
+            let address = rx.recv().await?;
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                writer.write(&protocol::read_register(address)),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(Error::Timeout(format!(
+                    "write read request 0x{address:02x}"
+                )))
+            });
+            Some(((address, result), (writer, rx)))
+        });
+    tokio::pin!(writes);
+    let mut writing = false;
+    let mut next_battery_request = start + Duration::from_secs(1);
+    let mut battery_outstanding: Option<Instant> = None;
     let mut last_bytes = start;
     let mut last_delivery: Option<Instant> = None;
     let mut next_link_check = start + Duration::from_secs(1);
-    lock(shared).status.ble_link = connection.link_status();
+    lock(shared).status.ble_link = reader.link_status();
     let mut parser = Parser::default();
     // Public frame counters span the whole start; this watchdog is connection-local.
     let mut received_frame = false;
@@ -832,18 +883,22 @@ async fn pump(
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let output_deadline = sender.as_ref().and_then(Sender::deadline);
-        let request_deadline = (config.pose_input == PoseInput::Quaternion)
+        let request_deadline = (config.pose_input == PoseInput::Quaternion && !writing)
             .then(|| outstanding.map_or(next_request, |sent| sent + Duration::from_millis(250)));
+        let battery_deadline =
+            (!writing && battery_outstanding.is_none()).then_some(next_battery_request);
+        let battery_timeout = battery_outstanding.map(|sent| sent + battery::RESPONSE_TIMEOUT);
         tokio::select! {
             _ = cancel.changed() => return Err(Error::Cancelled),
-            bytes = connection.read() => {
+            bytes = reader.read() => {
                 let bytes = bytes?;
                 last_bytes = Instant::now();
                 let ns = last_bytes.duration_since(start).as_nanos().min(i64::MAX as u128) as u64;
                 let old_discarded = parser.discarded_bytes;
                 let old_invalid = parser.invalid_frames;
                 let frames = parser.push(&bytes);
-                received_frame |= !frames.is_empty();
+                // Battery replies cannot validate an otherwise unsupported pose stream.
+                received_frame |= frames.iter().any(|frame| !matches!(frame, Frame::Registers { address: battery::REGISTER, .. }));
                 {
                     let mut state = lock(shared);
                     state.status.bytes_received += bytes.len() as u64;
@@ -906,6 +961,16 @@ async fn pump(
                                 Some(mounting.from_sensor_quaternion([q[1],q[2],q[3],q[0]]))
                             } else { None }
                         },
+                        Frame::Registers { address: battery::REGISTER, values } => {
+                            if let Some(sent) = battery_outstanding.take() {
+                                if last_bytes.duration_since(sent) < battery::RESPONSE_TIMEOUT {
+                                    lock(shared).battery.observe(values[0] as u16, last_bytes);
+                                } else {
+                                    lock(shared).battery.fail("battery read timed out (register 0x64)".into());
+                                }
+                            }
+                            None
+                        },
                         _ => None,
                     };
                     if let Some(q) = q {
@@ -939,15 +1004,38 @@ async fn pump(
             },
             _ = wait_for_deadline(output_deadline) => emit(shared,sender)?,
             _ = wait_for_deadline(request_deadline) => {
-                transport::cancel_after(cancel,Duration::from_secs(2),connection.write(&protocol::read_register(0x51))).await?;
+                requests.try_send(0x51).map_err(|e| Error::Internal(e.to_string()))?;
+                writing = true;
                 let sent = Instant::now();
                 outstanding=Some(sent);
                 next_request=sent+Duration::from_millis(20);
             },
+            _ = wait_for_deadline(battery_deadline) => {
+                requests.try_send(battery::REGISTER).map_err(|e| Error::Internal(e.to_string()))?;
+                writing = true;
+                let sent = Instant::now();
+                battery_outstanding = Some(sent);
+                next_battery_request = sent + battery::POLL_INTERVAL;
+            },
+            Some((address, result)) = writes.next() => {
+                writing = false;
+                if address == battery::REGISTER {
+                    if let Err(error) = result {
+                        battery_outstanding = None;
+                        lock(shared).battery.fail(error.to_string());
+                    }
+                } else {
+                    result?;
+                }
+            },
+            _ = wait_for_deadline(battery_timeout) => {
+                battery_outstanding = None;
+                lock(shared).battery.fail("battery read timed out (register 0x64)".into());
+            },
             _ = ticks.tick() => {
                 let now = Instant::now();
                 if now >= next_link_check {
-                    let link_status = connection.link_status();
+                    let link_status = reader.link_status();
                     lock(shared).status.ble_link = link_status;
                     next_link_check = now + Duration::from_secs(1);
                 }
@@ -969,6 +1057,47 @@ async fn pump(
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+
+    #[test]
+    fn battery_age_is_independent_and_new_sessions_clear_old_voltage() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let now = Instant::now();
+        let before = snapshot_at(&lock(&shared), now);
+        lock(&shared).battery.observe(387, now);
+        let reading = snapshot_at(&lock(&shared), now + Duration::from_secs(2));
+        assert!(reading.pose.is_none());
+        assert_eq!(reading.status.pose_count, 0);
+        assert_eq!(
+            reading.descriptor.metadata_revision,
+            before.descriptor.metadata_revision
+        );
+        assert_eq!(
+            reading.descriptor.reference_epoch,
+            before.descriptor.reference_epoch
+        );
+        assert!(reading.status.battery.fresh);
+        let json: serde_json::Value =
+            serde_json::from_str(&snapshot_json(&reading).unwrap()).unwrap();
+        assert_eq!(json["status"]["battery"]["voltage_v"], 3.87);
+        assert_eq!(json["status"]["battery"]["estimated_percent"], 75);
+        assert_eq!(json["status"]["battery"]["age_ns"], "2000000000");
+        for state in [
+            ConnectionState::Reconnecting,
+            ConnectionState::Stopped,
+            ConnectionState::Failed,
+        ] {
+            lock(&shared).status.state = state;
+            let stopped = snapshot_at(&lock(&shared), now + Duration::from_secs(3));
+            assert!(!stopped.status.battery.fresh);
+            assert_eq!(stopped.status.battery.age_ns, Some(3_000_000_000));
+        }
+        begin_session(&shared);
+        let reconnected = snapshot_at(&lock(&shared), now + Duration::from_secs(4));
+        assert!(reconnected.status.battery.voltage_v.is_none());
+        assert!(reconnected.status.battery.age_ns.is_none());
+        assert!(!reconnected.status.battery.fresh);
+    }
 
     #[test]
     fn query_age_freshness_and_stopped_pose_share_one_host_clock() {
@@ -1424,9 +1553,26 @@ mod tests {
         assert_eq!(lock(&shared).status.frames_received, 1);
         let (mut device, host) = SerialStream::pair().unwrap();
         let writer = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            let mut command = [0u8; 5];
+            let mut used = 0;
             loop {
-                device.write_all(&[0u8; 16]).await.unwrap();
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::select! {
+                    n = device.read(&mut command[used..]) => {
+                        let n = n.unwrap();
+                        assert!(n > 0);
+                        used += n;
+                        if used == command.len() {
+                            assert_eq!(command, protocol::read_register(battery::REGISTER));
+                            let mut response = [0u8; 20];
+                            response[..4].copy_from_slice(&[0x55, 0x71, 0x64, 0]);
+                            response[4..6].copy_from_slice(&382u16.to_le_bytes());
+                            device.write_all(&response).await.unwrap();
+                            used = 0;
+                        }
+                    },
+                    _ = tick.tick() => { device.write_all(&[0u8; 16]).await.unwrap(); },
+                }
             }
         });
         let mut connection = Connection::Usb(host);
@@ -1440,7 +1586,8 @@ mod tests {
         let _ = writer.await;
         assert!(matches!(result, Ok(Err(Error::Protocol(_)))), "{result:?}");
         let s = snapshot(&shared);
-        assert_eq!(s.status.frames_received, 1);
+        assert_eq!(s.status.frames_received, 2);
+        assert_eq!(s.status.battery.voltage_v, Some(3.82));
         assert_eq!(s.status.pose_count, 1);
         assert_eq!(s.status.session_samples, 0);
         assert!(s.status.bytes_received > frame.len() as u64);
@@ -1519,7 +1666,8 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(lock(&observed).pose.as_ref().unwrap().sample_time.is_none());
-        // Stream quaternion input is passive; it must not issue register requests.
+        // Stream quaternion input does not poll quaternion registers. The first
+        // low-frequency battery request is only due one second after connection.
         let mut command = [0u8; 5];
         assert!(
             tokio::time::timeout(Duration::from_millis(30), device.read_exact(&mut command))
@@ -1617,6 +1765,147 @@ mod tests {
                 .unwrap(),
             Err(Error::Cancelled)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn battery_reply_shares_parser_without_creating_poses_or_quaternion_retries() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let mut connection = Connection::Usb(host);
+        let config = Config {
+            source: Source::Usb {
+                port: "test-pty".into(),
+                baud: 115200,
+            },
+            pose_input: PoseInput::Quaternion,
+            mounting: Some(Mounting::parse("+x,+y,+z").unwrap()),
+            ..Config::default()
+        };
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let observed = shared.clone();
+        let (tx, mut cancel) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            pump(&config, &shared, &mut connection, &mut None, &mut cancel).await
+        });
+        let mut command = [0u8; 5];
+        // Leave quaternion requests unanswered until the battery query arrives.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                device.read_exact(&mut command).await.unwrap();
+                if command == protocol::read_register(battery::REGISTER) {
+                    break;
+                }
+                assert_eq!(command, protocol::read_register(0x51));
+            }
+        })
+        .await
+        .unwrap();
+        let mut response = [0u8; 20];
+        response[..4].copy_from_slice(&[0x55, 0x71, 0x64, 0]);
+        response[4..6].copy_from_slice(&382u16.to_le_bytes());
+        // Fragmented reply followed by a complete quaternion in the same read.
+        device.write_all(&response[..7]).await.unwrap();
+        let mut quaternion = [0u8; 20];
+        quaternion[..4].copy_from_slice(&[0x55, 0x71, 0x51, 0]);
+        quaternion[4..6].copy_from_slice(&32767u16.to_le_bytes());
+        device
+            .write_all(&[&response[7..], &quaternion].concat())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while snapshot(&observed).status.pose_count == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let result = snapshot(&observed);
+        assert_eq!(result.status.pose_count, 1);
+        assert_eq!(result.status.battery.voltage_v, Some(3.82));
+        assert_eq!(result.status.battery.estimated_percent, Some(60));
+        assert!(result.status.battery.fresh);
+        assert_eq!(result.status.discarded_bytes, 0);
+        assert_eq!(result.status.invalid_frames, 0);
+        // Extra unsolicited register replies cannot replace the requested reading.
+        response[4..6].copy_from_slice(&420u16.to_le_bytes());
+        device.write_all(&response).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(snapshot(&observed).status.battery.voltage_v, Some(3.82));
+        tx.send(true).unwrap();
+        assert!(matches!(worker.await.unwrap(), Err(Error::Cancelled)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_battery_reply_does_not_interrupt_pose_reception_or_retry_flood() {
+        let (mut device, host) = SerialStream::pair().unwrap();
+        let config = Config {
+            source: Source::Usb {
+                port: "test-pty".into(),
+                baud: 115200,
+            },
+            mounting: Some(Mounting::parse("+x,+y,+z").unwrap()),
+            ..Config::default()
+        };
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        begin_session(&shared);
+        let observed = shared.clone();
+        let (tx, mut cancel) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            pump(
+                &config,
+                &shared,
+                &mut Connection::Usb(host),
+                &mut None,
+                &mut cancel,
+            )
+            .await
+        });
+        let mut request_count = 0;
+        let mut command = [0u8; 5];
+        let mut frame = [0u8; 20];
+        frame[..2].copy_from_slice(&[0x55, 0x61]);
+        let mut ticks = tokio::time::interval(Duration::from_millis(10));
+        let mut sent = 0;
+        tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                tokio::select! {
+                    result = device.read_exact(&mut command) => {
+                        result.unwrap();
+                        assert_eq!(command, protocol::read_register(battery::REGISTER));
+                        request_count += 1;
+                    },
+                    _ = ticks.tick() => {
+                        device.write_all(&frame).await.unwrap();
+                        sent += 1;
+                        if snapshot(&observed).status.battery.last_error.is_some() { break; }
+                    },
+                }
+            }
+            while snapshot(&observed).status.pose_count < sent {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let result = snapshot(&observed);
+        assert_eq!(request_count, 1);
+        assert!(sent >= 300);
+        assert_eq!(result.status.pose_count, sent);
+        assert_eq!(result.status.state, ConnectionState::Active);
+        assert_eq!(result.status.reconnect_count, 0);
+        assert!(result.status.last_error.is_none());
+        assert!(result.status.battery.voltage_v.is_none());
+        assert!(!result.status.battery.fresh);
+        assert!(
+            result
+                .status
+                .battery
+                .last_error
+                .unwrap()
+                .contains("timed out")
+        );
+        tx.send(true).unwrap();
+        assert!(matches!(worker.await.unwrap(), Err(Error::Cancelled)));
     }
 
     // macOS PTYs do not implement IOSSIOSPEED. Use the library's PTY constructor instead

@@ -1,8 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use posebridge_core::{
-    AlgorithmMode, BleConnectionMode, Config, ConnectionState, Controller, DeviceCommand, Error,
-    OscConfig, OscFormat, OutputProfile, Pattern, PoseInput, Result, Source, TransportKind,
-    pose::Mounting,
+    AlgorithmMode, BatteryStatus, BleConnectionMode, Config, ConnectionState, Controller,
+    DeviceCommand, Error, OscConfig, OscFormat, OutputProfile, Pattern, PoseInput, Result, Source,
+    TransportKind, pose::Mounting,
 };
 use std::net::SocketAddr;
 use std::sync::{
@@ -213,7 +213,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Read the documented configuration registers without changing any settings.
+    /// Read configuration and battery voltage without changing any settings.
     Inspect {
         #[command(flatten)]
         input: InputArgs,
@@ -297,6 +297,19 @@ fn wait_operation(controller: &mut Controller, interrupted: &AtomicBool) -> Resu
     }
 }
 
+fn battery_text(battery: &BatteryStatus) -> String {
+    let freshness = if battery.fresh { "" } else { " (stale)" };
+    let reading = match (battery.voltage_v, battery.estimated_percent) {
+        (Some(voltage), Some(percent)) => format!("{voltage:.2}V/~{percent}%{freshness}"),
+        (Some(voltage), None) => format!("{voltage:.2}V (battery estimate unavailable){freshness}"),
+        _ => "unknown".into(),
+    };
+    match &battery.last_error {
+        Some(error) => format!("{reading} [{error}]"),
+        None => reading,
+    }
+}
+
 fn stream(
     controller: &mut Controller,
     config: Config,
@@ -328,7 +341,7 @@ fn stream(
                 let angles = pose.as_ref().map(|p| p.euler_deg);
                 let raw = pose.as_ref().and_then(|p| p.raw.euler_xyz_deg);
                 println!(
-                    "{:?} session={} samples={} rate={:.2}Hz osc={} yaw/pitch/roll={:?} raw XYZ={:?} sample_time={:?}{}",
+                    "{:?} session={} samples={} rate={:.2}Hz osc={} yaw/pitch/roll={:?} raw XYZ={:?} sample_time={:?} battery={}{}",
                     status.state,
                     status.session_id,
                     status.pose_count,
@@ -337,6 +350,7 @@ fn stream(
                     angles,
                     raw,
                     pose.as_ref().and_then(|p| p.sample_time),
+                    battery_text(&status.battery),
                     status
                         .last_error
                         .as_ref()
@@ -421,6 +435,7 @@ fn run() -> Result<()> {
                     serde_json::to_string_pretty(&snapshot.descriptor)
                         .map_err(|e| Error::Internal(e.to_string()))?
                 );
+                println!("battery={}", battery_text(&snapshot.status.battery));
             }
             result?;
             controller.stop()

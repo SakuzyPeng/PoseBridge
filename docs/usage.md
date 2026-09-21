@@ -42,8 +42,8 @@ posebridge configure --transport usb --port /dev/cu.usbserial-210 output --forma
 posebridge configure --transport usb --port /dev/cu.usbserial-210 algorithm --mode six-axis
 ```
 
-inspect 只读 CALSW、回传率、输出格式、带宽、设备安装方向、算法与版本。实际读取只在停止采集时进行。
-C ABI 快照查询可在采集期间返回观察时间与有效性明确的缓存，不产生后台寄存器轮询。
+inspect 只读 CALSW、回传率、输出格式、带宽、设备安装方向、算法、版本与电压。实际检查只在停止采集时进行。
+C ABI 快照查询返回缓存；配置寄存器不后台轮询，电压由采集任务按下述低频规则独立更新。
 软件支持命令、设备回读值、应用安装映射与校准质量分别报告；未确认项为 null。
 
 | configure 子命令 | 行为／保存边界 |
@@ -63,6 +63,24 @@ C ABI 快照查询可在采集期间返回观察时间与有效性明确的缓�
 允许过渡旧回复，但不会重写设置。超时不证明写入没发生。
 校准、算法、参考或安装映射变化，以及写入后结果不确定时，更新参考代次／原因。回正由下游处理。
 只读查询和一般测试不会自动调用校准、参考保存或恢复默认。
+
+## 电压与估算电量
+
+`inspect` 可查询一次；`diagnose`／`bridge` 连接后约 1 秒首次读取，之后每 30 秒发送一次
+`FF AA 27 64 00`。USB 与 BLE 使用相同的只读寄存器命令，不解锁、不改输出格式、不保存配置。
+回包与姿态共用解析器，发送请求和接收数据可并行；采集中的电量查询 3 秒未响应就标记错误，等下一周期再尝试。
+电量失败不终止姿态采集。模拟器不生成虚构电量。
+
+命令行显示如 `battery=3.82V/~60%`。JSON 快照、`pb_snapshot_json` 和 `/posebridge/status` 的
+`status.battery` 提供 `raw_register`、`voltage_v`、`estimated_percent`、`age_ns`、`fresh`、`last_error`。
+`age_ns` 是最后一次有效电压响应到本次查询的主机纳秒，以十进制字符串表示，与姿态年龄独立。
+首次有效响应前数值为 null；错误保留最后有效值并令 fresh=false，90 秒过期或断线／停止也为 false。
+新连接清空旧电量，消费者必须检查 fresh；收到快照后还须补计本地经过时间。
+
+百分比按 WIT BLE 5.0 官方 SDK 的电压分档表估算，不能推断续航或充电状态。有效电压检查范围为 2.00–5.50 V；
+超过 4.30 V 时仍报告电压，但 `estimated_percent=null`，因为可能读到模块供电电压。
+本机 USB 供电实测约 4.83 V，此时命令行显示 `battery estimate unavailable`，不会标成满电。
+C 固定结构、OSC 姿态报文、快照 schema 4 和心跳 schema 3 均沿用原接口；JSON 增加电量字段。
 
 ## OSC 与安装
 
