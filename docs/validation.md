@@ -1,5 +1,8 @@
 # 当前验证入口
 
+PoseBridge 0.6 的磁场接口、双平台软件检查和本轮实机覆盖见[磁场验证记录](measurements/2026-09-22-magnetic.md)。
+macOS USB 读取通过；其余链路本轮设备不可用，物理校准精度及保存持久性尚未验收。
+
 电压／估算电量的双平台软件检查、USB／BLE 实机读取与供电读数限制见[电量验证记录](measurements/2026-09-21-battery.md)。
 
 PoseBridge 0.5 的同帧运动接口、双平台构建与兼容检查见 [0.5 验证记录](measurements/2026-09-21-motion-api.md)。

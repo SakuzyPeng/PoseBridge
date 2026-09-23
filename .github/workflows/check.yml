@@ -23,5 +23,6 @@ jobs:
       - run: python scripts/export_header.py
       - run: git diff --exit-code -- include/posebridge.h
       - run: python tests/osc_cli_smoke.py
+      - run: python tests/magnetic_smoke.py
       - name: C ABI and C11 consumer checks
         run: python scripts/check_c_api.py

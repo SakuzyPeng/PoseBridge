@@ -10,6 +10,7 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 - BLE 无线与 USB 串口采集，共用数据解析和姿态转换。
 - 设备扫描、只读配置检查、显式设备控制与断线重连。
 - 电压与估算电量查询；采集时每 30 秒更新，通过 CLI、JSON 快照与 OSC 状态心跳提供。
+- 独立磁场监测与校准会话：点云数据、基础统计和显式开始／结束／保存，支持 Rust、C ABI 与 CLI。
 - 四元数／欧拉角 OSC 输出、时间戳、来源描述与独立状态心跳，以及无设备模拟器。
 - Rust 核心库、CLI、实验性 C ABI 0.4（版本 400），以及可运行的 C11 消费示例。
 
@@ -17,6 +18,9 @@ A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and a
 只支持当前接口；旧地址、旧结构和 `--osc-version` 已移除，C 调用方须同步升级头文件与动态库。
 
 Rust 0.5 新增[同帧运动批次接口](docs/motion.md)：物理四元数、角速度、加速度与设备时间戳；C ABI 400、OSC 3 及 JSON schema 4 保持原布局。
+
+Rust 0.6 新增[磁场可视化校准接口](docs/magnetic.md)，使用独立磁场批次 JSON schema 1。
+新 C 导出要求升级到 0.6 动态库，已有 C ABI 400 结构布局保持不变。
 
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
 macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。

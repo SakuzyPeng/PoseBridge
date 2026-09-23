@@ -15,6 +15,10 @@ mod timing;
 mod transport;
 
 pub use controller::Controller;
+pub use controller::magnetic::{
+    MAGNETIC_HISTORY_CAPACITY, MagneticBatch, MagneticCursor, MagneticPhase, MagneticSample,
+    MagneticStatistics,
+};
 pub use model::*;
 pub use motion::{
     FULL_INERTIAL_20HZ_VALIDATED, MOTION_HISTORY_CAPACITY, MotionBatch, MotionCursor, MotionSample,

@@ -2,7 +2,9 @@
 //! All non-null caller pointers must be live, aligned, and valid for their supplied lengths.
 //! Lifecycle/configuration calls are externally serialized; destroy must not race any access.
 
-use posebridge_core::{Config, Controller, DeviceCommand, Error, PoseSnapshot, TransportKind};
+use posebridge_core::{
+    Config, Controller, DeviceCommand, Error, MagneticCursor, PoseSnapshot, TransportKind,
+};
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
@@ -277,6 +279,50 @@ pub unsafe extern "C" fn pb_inspect_start(value: *mut PbContext) -> i32 {
     boundary(value, || {
         lock(&context(value)?.controller).inspect_start()?;
         Ok(())
+    })
+}
+
+/// Open an exclusive read-only magnetic session (PoseBridge >= 0.6).
+/// No mounting is required. Use pb_device_command for mag_start/mag_stop/save,
+/// and pb_stop to close. Normal acquisition must already be stopped.
+/// # Safety
+/// value is live and lifecycle/control calls are serialized.
+#[no_mangle]
+pub unsafe extern "C" fn pb_magnetic_start(value: *mut PbContext) -> i32 {
+    boundary(value, || {
+        lock(&context(value)?.controller).magnetic_start()?;
+        Ok(())
+    })
+}
+
+/// Query a non-consuming magnetic batch, status, statistics and operation result
+/// as JSON schema 1. cursor=NULL with cursor_len=0 (or JSON null) reads retained
+/// history; otherwise pass the returned cursor object. 64-bit values are strings.
+/// Like pb_snapshot_json, size queries return PB_BUFFER_TOO_SMALL; retrying never
+/// consumes records. Histories remain queryable after stop, with fresh=false.
+/// # Safety
+/// value is live; cursor points to cursor_len bytes (NULL only when length=0);
+/// required is writable; buffer is writable for capacity bytes (NULL iff capacity=0).
+#[no_mangle]
+pub unsafe extern "C" fn pb_magnetic_since_json(
+    value: *const PbContext,
+    cursor: *const c_char,
+    cursor_len: u32,
+    buffer: *mut c_char,
+    capacity: u32,
+    required: *mut u32,
+) -> i32 {
+    boundary(value, || {
+        let cursor: Option<MagneticCursor> = if cursor.is_null() && cursor_len == 0 {
+            None
+        } else {
+            serde_json::from_str(json_input(cursor, cursor_len)?)
+                .map_err(|e| Failure(PB_INVALID_ARGUMENT, e.to_string()))?
+        };
+        let batch = lock(&context(value)?.controller).magnetic_since(cursor);
+        let text =
+            serde_json::to_string(&batch).map_err(|e| Failure(PB_INTERNAL_ERROR, e.to_string()))?;
+        copy_text(&text, buffer, capacity, required)
     })
 }
 

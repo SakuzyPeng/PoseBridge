@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
 
+#[path = "magnetic.rs"]
+pub(crate) mod magnetic;
+use magnetic::{MagneticBatch, MagneticCursor};
+
 pub const STALE_AFTER: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
@@ -29,6 +33,7 @@ struct Shared {
     first_pose: Option<Instant>,
     motion: History,
     battery: Battery,
+    magnetic: magnetic::State,
 }
 type SharedRef = Arc<Mutex<Shared>>;
 
@@ -63,6 +68,7 @@ pub struct Controller {
     shared: SharedRef,
     config: Config,
     task: Option<Task>,
+    magnetic_commands: Option<tokio::sync::mpsc::Sender<DeviceCommand>>,
 }
 
 impl Controller {
@@ -77,6 +83,7 @@ impl Controller {
             shared: Arc::new(Mutex::new(Shared::default())),
             config: Config::default(),
             task: None,
+            magnetic_commands: None,
         })
     }
 
@@ -115,6 +122,7 @@ impl Controller {
                 s.descriptor.device_name = old.device_name;
             }
             s.motion = History::default();
+            s.magnetic = magnetic::State::default();
             s.pose = None;
             s.last_pose = None;
             s.status = StatusSnapshot::default();
@@ -141,6 +149,7 @@ impl Controller {
             s.descriptor.session_id = 0;
             s.descriptor.metadata_revision += 1;
             s.motion = History::default();
+            s.magnetic = magnetic::State::default();
             s.pose = None;
             s.last_pose = None;
             s.first_pose = None;
@@ -159,6 +168,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.devices.clear();
+            s.magnetic = magnetic::State::default();
             s.battery = Battery::default();
             s.status.state = ConnectionState::Scanning;
         }
@@ -181,6 +191,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.status.state = ConnectionState::Inspecting;
+            s.magnetic = magnetic::State::default();
             s.status.last_error = None;
             s.status.configuration_report = None;
             s.battery = Battery::default();
@@ -222,6 +233,33 @@ impl Controller {
     pub fn configure_device(&mut self, command: DeviceCommand) -> Result<()> {
         self.config.validate()?;
         protocol::command_register(&command)?;
+        if let Some(tx) = &self.magnetic_commands
+            && self.task.as_ref().is_some_and(|t| !t.handle.is_finished())
+        {
+            let mut s = lock(&self.shared);
+            if !matches!(
+                command,
+                DeviceCommand::MagStart | DeviceCommand::MagStop | DeviceCommand::Save
+            ) || !s.magnetic.ready()
+                || s.operation
+                    .as_ref()
+                    .is_some_and(|op| op.outcome == OperationOutcome::Running)
+            {
+                return Err(Error::Busy);
+            }
+            let action = match command {
+                DeviceCommand::MagStart => "mag_start",
+                DeviceCommand::MagStop => "mag_stop",
+                _ => "save",
+            };
+            let mut operation = OperationStatus::new(action.into());
+            operation.source_id = Some(s.descriptor.source_id.clone());
+            // Keep the shared lock until the operation is published: the worker
+            // cannot complete the queued command before its status exists.
+            tx.try_send(command).map_err(|_| Error::Busy)?;
+            s.operation = Some(operation);
+            return Ok(());
+        }
         self.ensure_idle()?;
         if matches!(self.config.source, Source::Simulate { .. }) {
             return Err(Error::Invalid("simulator has no device registers".into()));
@@ -235,6 +273,7 @@ impl Controller {
         {
             let mut s = lock(&self.shared);
             s.status.state = ConnectionState::Configuring;
+            s.magnetic = magnetic::State::default();
             s.battery = Battery::default();
             s.status.last_error = None;
             s.status.configuration_report = None;
@@ -249,6 +288,54 @@ impl Controller {
             result
         });
         Ok(())
+    }
+
+    /// Open an exclusive, read-only magnetic monitor; use explicit device
+    /// commands to begin/end calibration or save. No mounting is required.
+    pub fn magnetic_start(&mut self) -> Result<()> {
+        self.config.validate()?;
+        self.ensure_idle()?;
+        if matches!(self.config.source, Source::Simulate { .. }) {
+            return Err(Error::Invalid("simulator has no magnetic registers".into()));
+        }
+        let source = self.config.source.clone();
+        {
+            let mut s = lock(&self.shared);
+            s.status = StatusSnapshot::default();
+            s.status.state = ConnectionState::Connecting;
+            s.descriptor.instance_id = new_id();
+            s.descriptor.session_id = new_id();
+            s.status.session_id = s.descriptor.session_id;
+            s.descriptor.metadata_revision += 1;
+            s.descriptor.device.valid = false;
+            s.magnetic = magnetic::State::new(s.descriptor.instance_id, s.descriptor.session_id);
+            s.motion = History::default();
+            s.battery = Battery::default();
+            s.pose = None;
+            s.last_pose = None;
+            s.first_pose = None;
+            s.operation = None;
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.magnetic_commands = Some(tx);
+        self.launch(None, move |shared, cancel| {
+            magnetic::run(source, shared, cancel, rx)
+        });
+        Ok(())
+    }
+
+    /// Non-consuming incremental magnetic query, including status and operation
+    /// outcome under the same lock. Never performs device I/O.
+    pub fn magnetic_since(&self, cursor: Option<MagneticCursor>) -> MagneticBatch {
+        let s = lock(&self.shared);
+        s.magnetic.since(
+            cursor,
+            s.descriptor.source_id.clone(),
+            (s.magnetic.phase != magnetic::MagneticPhase::Idle)
+                .then(|| s.operation.clone())
+                .flatten(),
+            Instant::now(),
+        )
     }
 
     fn launch<F, Fut>(&mut self, osc: Option<OscConfig>, work: F)
@@ -300,6 +387,9 @@ impl Controller {
                         Err(_) => {
                             s.status.state = ConnectionState::Failed;
                             s.status.last_error = Some("internal worker panic".into());
+                            if !matches!(s.magnetic.phase, magnetic::MagneticPhase::Idle | magnetic::MagneticPhase::Closed | magnetic::MagneticPhase::Failed) {
+                                s.magnetic.finish(Some("internal worker panic; device calibration state unknown".into()));
+                            }
                             if let Some(op) = &mut s.operation && op.outcome == OperationOutcome::Running { op.outcome = OperationOutcome::Failed; }
                         },
                     }
@@ -314,6 +404,7 @@ impl Controller {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        let magnetic = self.magnetic_commands.take().is_some();
         if let Some(task) = self.task.take() {
             let _ = task.cancel.send(true);
             if task.done.recv_timeout(Duration::from_secs(5)).is_err() {
@@ -322,7 +413,18 @@ impl Controller {
                 let mut s = lock(&self.shared);
                 s.status.state = ConnectionState::Failed;
                 s.status.last_error = Some("stop timed out; worker aborted".into());
+                if magnetic {
+                    s.magnetic.finish(Some(
+                        "stop timed out; device calibration state unknown".into(),
+                    ));
+                }
                 return Err(Error::Timeout("stop; worker aborted".into()));
+            }
+        }
+        if magnetic {
+            let s = lock(&self.shared);
+            if let Some(error) = &s.magnetic.last_error {
+                return Err(Error::Io(error.clone()));
             }
         }
         lock(&self.shared).status.state = ConnectionState::Stopped;

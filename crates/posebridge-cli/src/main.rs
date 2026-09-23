@@ -1,8 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use posebridge_core::{
     AlgorithmMode, BatteryStatus, BleConnectionMode, Config, ConnectionState, Controller,
-    DeviceCommand, Error, OscConfig, OscFormat, OutputProfile, Pattern, PoseInput, Result, Source,
-    TransportKind, pose::Mounting,
+    DeviceCommand, Error, MagneticCursor, MagneticPhase, OperationOutcome, OscConfig, OscFormat,
+    OutputProfile, Pattern, PoseInput, Result, Source, TransportKind, pose::Mounting,
 };
 use std::net::SocketAddr;
 use std::sync::{
@@ -203,7 +203,37 @@ enum ConfigureAction {
 }
 
 #[derive(Subcommand)]
+enum MagneticAction {
+    /// Read magnetic XYZ at up to 5 Hz without changing device settings.
+    Monitor {
+        #[command(flatten)]
+        input: InputArgs,
+        #[arg(long, default_value_t = 30.0)]
+        duration: f64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Start device calibration, collect while rotating, then explicitly stop.
+    Calibrate {
+        #[command(flatten)]
+        input: InputArgs,
+        #[arg(long, default_value_t = 60.0)]
+        duration: f64,
+        /// Save only after normal completion and verified calibration exit.
+        #[arg(long)]
+        save: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
+    /// Exclusive magnetic monitor/calibration; no pose or OSC output.
+    Magnetic {
+        #[command(subcommand)]
+        action: MagneticAction,
+    },
     /// Enumerate devices without connecting or writing configuration.
     Scan {
         #[arg(long, value_enum, default_value = "ble")]
@@ -386,6 +416,163 @@ fn stream(
     Ok(())
 }
 
+fn print_magnetic(
+    controller: &Controller,
+    cursor: &mut Option<MagneticCursor>,
+    json: bool,
+) -> Result<()> {
+    let batch = controller.magnetic_since(*cursor);
+    *cursor = batch.cursor;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&batch).map_err(|e| Error::Internal(e.to_string()))?
+        );
+    } else {
+        println!(
+            "{:?} samples={} rate={:.2}Hz counts={:?} uT={:?} span={:?} operation={:?} cleanup={:?} error={:?}",
+            batch.phase,
+            batch.statistics.sample_count,
+            batch.statistics.actual_rate_hz,
+            batch.latest.as_ref().map(|s| s.register_xyz),
+            batch.latest.as_ref().and_then(|s| s.field_ut),
+            batch.statistics.span_counts,
+            batch.operation.as_ref().map(|o| (&o.action, o.outcome)),
+            batch.cleanup.as_ref().map(|o| o.outcome),
+            batch.last_error
+        );
+    }
+    Ok(())
+}
+
+fn magnetic_operation(
+    controller: &mut Controller,
+    command: DeviceCommand,
+    interrupted: &AtomicBool,
+    cursor: &mut Option<MagneticCursor>,
+    json: bool,
+) -> Result<()> {
+    if interrupted.load(Ordering::Relaxed) {
+        return Err(Error::Cancelled);
+    }
+    controller.configure_device(command)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if interrupted.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let batch = controller.magnetic_since(*cursor);
+        if let Some(e) = batch.last_error {
+            return Err(Error::Io(e));
+        }
+        if let Some(op) = batch.operation
+            && op.outcome != OperationOutcome::Running
+        {
+            print_magnetic(controller, cursor, json)?;
+            return match op.outcome {
+                OperationOutcome::Succeeded | OperationOutcome::Unverified => Ok(()),
+                OperationOutcome::Cancelled => Err(Error::Cancelled),
+                _ => Err(Error::Protocol(
+                    op.message
+                        .unwrap_or_else(|| "magnetic operation failed".into()),
+                )),
+            };
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::Timeout("magnetic control".into()));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn run_magnetic(
+    controller: &mut Controller,
+    interrupted: &AtomicBool,
+    input: InputArgs,
+    duration: f64,
+    calibrate: bool,
+    save: bool,
+    json: bool,
+) -> Result<()> {
+    if !duration.is_finite() || !(0.0..=86400.0).contains(&duration) || duration == 0.0 {
+        return Err(Error::Invalid(
+            "magnetic duration must be >0 and <=86400 seconds".into(),
+        ));
+    }
+    controller.set_config(input.config(false)?)?;
+    controller.magnetic_start()?;
+    let mut cursor = None;
+    let result = (|| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if interrupted.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            let batch = controller.magnetic_since(None);
+            if let Some(e) = batch.last_error {
+                return Err(Error::Io(e));
+            }
+            if batch.active && batch.phase != MagneticPhase::Opening {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout("magnetic connection/first sample".into()));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        print_magnetic(controller, &mut cursor, json)?;
+        if calibrate {
+            magnetic_operation(
+                controller,
+                DeviceCommand::MagStart,
+                interrupted,
+                &mut cursor,
+                json,
+            )?;
+            eprintln!(
+                "Rotate the sensor around all three axes. Duration is not an accuracy assessment."
+            );
+        }
+        let end = Instant::now() + Duration::from_secs_f64(duration);
+        while Instant::now() < end {
+            if interrupted.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            print_magnetic(controller, &mut cursor, json)?;
+            if let Some(e) = controller.magnetic_since(cursor).last_error {
+                return Err(Error::Io(e));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        if calibrate {
+            magnetic_operation(
+                controller,
+                DeviceCommand::MagStop,
+                interrupted,
+                &mut cursor,
+                json,
+            )?;
+            if save {
+                magnetic_operation(
+                    controller,
+                    DeviceCommand::Save,
+                    interrupted,
+                    &mut cursor,
+                    json,
+                )?;
+            }
+        }
+        Ok(())
+    })();
+    let stopped = controller.stop();
+    print_magnetic(controller, &mut cursor, json)?;
+    match (result, stopped) {
+        (Err(e), Err(cleanup)) => Err(Error::Io(format!("{e}; shutdown: {cleanup}"))),
+        (Err(e), _) | (_, Err(e)) => Err(e),
+        _ => Ok(()),
+    }
+}
+
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -394,6 +581,35 @@ fn run() -> Result<()> {
         .map_err(|e| Error::Internal(e.to_string()))?;
     let mut controller = Controller::new()?;
     match cli.command {
+        Command::Magnetic { action } => match action {
+            MagneticAction::Monitor {
+                input,
+                duration,
+                json,
+            } => run_magnetic(
+                &mut controller,
+                &interrupted,
+                input,
+                duration,
+                false,
+                false,
+                json,
+            ),
+            MagneticAction::Calibrate {
+                input,
+                duration,
+                save,
+                json,
+            } => run_magnetic(
+                &mut controller,
+                &interrupted,
+                input,
+                duration,
+                true,
+                save,
+                json,
+            ),
+        },
         Command::Scan {
             transport,
             timeout_seconds,

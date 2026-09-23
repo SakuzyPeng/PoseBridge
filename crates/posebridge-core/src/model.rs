@@ -223,6 +223,7 @@ pub enum ConnectionState {
     Configuring = 8,
     Complete = 9,
     Inspecting = 10,
+    Magnetic = 11,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -516,6 +517,7 @@ impl SourceDescriptor {
                 "accel_calibrate",
                 "mag_start",
                 "mag_stop",
+                "magnetic_session",
                 "save",
             ]
             .into_iter()
@@ -587,13 +589,13 @@ pub fn snapshot_json(snapshot: &Snapshot) -> Result<String> {
     serde_json::to_string(snapshot).map_err(|e| Error::Internal(e.to_string()))
 }
 
-mod decimal {
+pub(crate) mod decimal {
     use serde::Serializer;
     pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&value.to_string())
     }
 }
-mod optional_decimal {
+pub(crate) mod optional_decimal {
     use serde::Serializer;
     pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
         match value {

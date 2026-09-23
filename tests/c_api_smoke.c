@@ -36,6 +36,15 @@ int main(void) {
     char *json = (char*)malloc(required); assert(json);
     assert(pb_snapshot_json(ctx, json, required, &required) == PB_OK && strstr(json, "\"schema\":4")); free(json);
     const char *config = "{\"source_id\":\"head\",\"source\":{\"kind\":\"simulate\",\"euler_deg\":[30,20,10],\"rate_hz\":1,\"sample_clock\":true}}";
+    assert(pb_magnetic_start(ctx) == PB_INVALID_ARGUMENT); /* simulator */
+    assert(pb_magnetic_since_json(ctx, NULL, 0, NULL, 0, &required) == PB_BUFFER_TOO_SMALL);
+    char *magnetic = (char*)malloc(required); assert(magnetic);
+    assert(pb_magnetic_since_json(ctx, NULL, 0, magnetic, required, &required) == PB_OK);
+    assert(strstr(magnetic, "\"schema\":1") && strstr(magnetic, "\"samples\":[]") && strstr(magnetic, "\"active\":false"));
+    free(magnetic);
+    const char *bad_cursor = "{\"instance_id\":1,\"session_id\":\"1\",\"sequence\":\"0\"}";
+    assert(pb_magnetic_since_json(ctx, bad_cursor, (uint32_t)strlen(bad_cursor), NULL, 0, &required) == PB_INVALID_ARGUMENT);
+    assert(pb_magnetic_since_json(ctx, NULL, 1, NULL, 0, &required) == PB_INVALID_ARGUMENT);
     assert(pb_configure(ctx, config, (uint32_t)strlen(config)) == PB_OK);
     assert(pb_inspect_start(ctx) == PB_INVALID_ARGUMENT);
     assert(pb_start(ctx) == PB_OK);

@@ -158,6 +158,32 @@ int32_t pb_scan_start(struct PbContext *value, uint32_t transport, uint32_t seco
 int32_t pb_inspect_start(struct PbContext *value);
 
 /**
+ * Open an exclusive read-only magnetic session (PoseBridge >= 0.6).
+ * No mounting is required. Use pb_device_command for mag_start/mag_stop/save,
+ * and pb_stop to close. Normal acquisition must already be stopped.
+ * # Safety
+ * value is live and lifecycle/control calls are serialized.
+ */
+int32_t pb_magnetic_start(struct PbContext *value);
+
+/**
+ * Query a non-consuming magnetic batch, status, statistics and operation result
+ * as JSON schema 1. cursor=NULL with cursor_len=0 (or JSON null) reads retained
+ * history; otherwise pass the returned cursor object. 64-bit values are strings.
+ * Like pb_snapshot_json, size queries return PB_BUFFER_TOO_SMALL; retrying never
+ * consumes records. Histories remain queryable after stop, with fresh=false.
+ * # Safety
+ * value is live; cursor points to cursor_len bytes (NULL only when length=0);
+ * required is writable; buffer is writable for capacity bytes (NULL iff capacity=0).
+ */
+int32_t pb_magnetic_since_json(const struct PbContext *value,
+                               const char *cursor,
+                               uint32_t cursor_len,
+                               char *buffer,
+                               uint32_t capacity,
+                               uint32_t *required);
+
+/**
  * Issue an explicit device command JSON (e.g. {"action":"rate","hz":100}).
  * # Safety
  * value is live, data references len readable bytes, and control calls are serialized.

@@ -1,6 +1,7 @@
 # PoseBridge C ABI 400（experimental）
 
-Rust 包 0.5 沿用 0.4 的 C ABI 400，结构布局与 OSC 3 均不变。新运动批次接口仅供 Rust 进程内消费者。
+Rust 包 0.6 沿用 0.4 的 C ABI 400，结构布局与 OSC 3 均不变。运动批次接口仅供 Rust 进程内消费者。
+0.6 新增 `pb_magnetic_start` 和 `pb_magnetic_since_json`，要求升级动态库；见[磁场接口](magnetic.md)。
 
 头文件 [posebridge.h](../include/posebridge.h) 由 cbindgen 生成；`pb_abi_version()` 必须等于 **400**。
 0.4 在 `PbPose` 中加入 `age_ns`，不保留 ABI 300 布局。源码、头文件和动态库一起升级并重新编译调用方；
@@ -47,7 +48,7 @@ raw_flags：bit0 完整运动组，bit1 原始四元数，bit2/3/4 分别为 Eul
 年龄是查询时快照，返回后不会自行增长；宿主排队期间的经过时间需由宿主自己的单调时钟补计。
 它不包含设备采样到 USB/BLE 接收的延迟，不使用设备日历计算，也不等于运动到声音的总延迟。
 
-状态：0 idle、1 scanning、2 connecting、3 active、4 stale、5 reconnecting、6 stopped、7 failed、8 configuring、9 complete、10 inspecting。
+状态：0 idle、1 scanning、2 connecting、3 active、4 stale、5 reconnecting、6 stopped、7 failed、8 configuring、9 complete、10 inspecting、11 magnetic。
 
 ## 配置与设备控制
 
@@ -69,6 +70,8 @@ pose_input 为 euler、quaternion（寄存器轮询）或 stream_quaternion（�
 `pb_device_command` 接收 action JSON：rate（hz）、output（format）、algorithm（mode=six_axis/nine_axis）、
 zero_yaw、angle_reference、reset_defaults、accel_calibrate、mag_start、mag_stop、save。
 控制语义见[使用指南](usage.md#设备检查与控制)。
+独立磁场会话内也可发送 mag_start／mag_stop／save，其他命令仍返回 Busy；结果以 operation.outcome 为准，
+会话不会因命令结束而转成 complete。关闭会话会清理由本会话启动的校准，不自动 SAVE。
 
 operation 包含操作 id、目标 source_id、action、outcome、write_attempted、command_sent、register_verified、
 completion_observed、persistence、reference_may_have_changed 和 message。
