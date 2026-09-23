@@ -463,19 +463,19 @@ impl Io<'_> {
     }
     async fn execute(&mut self, command: DeviceCommand, cleanup: bool) -> Result<()> {
         let previous = lock(&self.shared).magnetic.phase;
-        if !cleanup {
-            let calsw = self.read_register(1, None).await?[0];
-            if (matches!(command, DeviceCommand::MagStart | DeviceCommand::Save) && calsw != 0)
-                || (matches!(command, DeviceCommand::MagStop) && ![0, 7].contains(&calsw))
-            {
-                return Err(Error::Invalid(format!(
-                    "magnetic command not allowed with CALSW={calsw}"
-                )));
-            }
-            if matches!(command, DeviceCommand::MagStart) {
-                // A new read proves the magnetic path works before any calibration write.
-                self.read_register(0x3a, None).await?;
-            }
+        // Cleanup owns the earlier start attempt, not any other calibration
+        // that may have replaced it. Always check the current device state.
+        let calsw = self.read_register(1, None).await?[0];
+        if (matches!(command, DeviceCommand::MagStart | DeviceCommand::Save) && calsw != 0)
+            || (matches!(command, DeviceCommand::MagStop) && ![0, 7].contains(&calsw))
+        {
+            return Err(Error::Invalid(format!(
+                "magnetic command not allowed with CALSW={calsw}"
+            )));
+        }
+        if matches!(command, DeviceCommand::MagStart) {
+            // A new read proves the magnetic path works before any calibration write.
+            self.read_register(0x3a, None).await?;
         }
         lock(&self.shared).magnetic.phase = match command {
             DeviceCommand::MagStart => MagneticPhase::Starting,
@@ -616,7 +616,20 @@ pub(super) async fn run(
     };
     let result = run_connection(&mut connection, shared.clone(), cancel, &mut commands).await;
     // Cleanup plus close must fit the Controller's five-second stop budget.
-    let _ = tokio::time::timeout(Duration::from_millis(500), connection.close()).await;
+    // Separate budgets ensure unsubscribe cannot consume the disconnect attempt.
+    if let Err(error) = connection
+        .close_with_timeout(Duration::from_millis(250))
+        .await
+    {
+        let message = match &result {
+            Err(previous) if !matches!(previous, Error::Cancelled) => {
+                format!("{previous}; magnetic connection close failed: {error}")
+            }
+            _ => format!("magnetic connection close failed: {error}"),
+        };
+        lock(&shared).magnetic.finish(Some(message.clone()));
+        return Err(Error::Io(message));
+    }
     result
 }
 
@@ -797,6 +810,7 @@ mod tests {
             hide_start: bool,
             silence_mag: bool,
             silence_type: bool,
+            silence_calsw: bool,
         }
         struct Fixture {
             shared: SharedRef,
@@ -833,6 +847,7 @@ mod tests {
                             if cmd[2] != 0x27
                                 || (cmd[3] == 0x3a && d.silence_mag)
                                 || (cmd[3] == 0x72 && d.silence_type)
+                                || (cmd[3] == 1 && d.silence_calsw)
                             {
                                 None
                             } else {
@@ -985,6 +1000,44 @@ mod tests {
             assert!(!s.magnetic.owned);
             assert_eq!(writes(&commands, 1, 7), 1);
             assert_eq!(writes(&commands, 1, 0), 1);
+            assert_eq!(writes(&commands, 0, 0), 0);
+        }
+
+        #[tokio::test]
+        async fn cleanup_checks_current_calsw_without_stopping_another_calibration() {
+            let f = Fixture::new(0).await;
+            f.command(DeviceCommand::MagStart).await;
+            let device = f.device.clone();
+            device.lock().unwrap().calsw = 1;
+            let (result, s, commands) = f.finish().await;
+            assert!(result.is_err());
+            assert_eq!(device.lock().unwrap().calsw, 1);
+            let s = lock(&s);
+            assert_eq!(s.magnetic.calsw, Some(1));
+            assert_eq!(s.magnetic.phase, MagneticPhase::Failed);
+            assert!(s.magnetic.last_error.as_ref().unwrap().contains("CALSW=1"));
+            let cleanup = s.magnetic.cleanup.as_ref().unwrap();
+            assert_eq!(cleanup.outcome, OperationOutcome::Failed);
+            assert!(!cleanup.write_attempted && !cleanup.command_sent);
+            assert_eq!(writes(&commands, 1, 7), 1);
+            assert_eq!(writes(&commands, 1, 0), 0);
+            assert_eq!(writes(&commands, 0, 0), 0);
+        }
+
+        #[tokio::test]
+        async fn cleanup_does_not_write_when_current_calsw_is_unavailable() {
+            let f = Fixture::new(0).await;
+            f.command(DeviceCommand::MagStart).await;
+            f.device.lock().unwrap().silence_calsw = true;
+            let (result, s, commands) = f.finish().await;
+            assert!(result.is_err());
+            let s = lock(&s);
+            assert!(s.magnetic.owned && !s.magnetic.running);
+            assert_eq!(s.magnetic.phase, MagneticPhase::Failed);
+            let cleanup = s.magnetic.cleanup.as_ref().unwrap();
+            assert_eq!(cleanup.outcome, OperationOutcome::Failed);
+            assert!(!cleanup.write_attempted && !cleanup.command_sent);
+            assert_eq!(writes(&commands, 1, 0), 0);
             assert_eq!(writes(&commands, 0, 0), 0);
         }
 

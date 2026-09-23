@@ -196,6 +196,26 @@ def check_c_api():
         sensor.close()
 
 
+def check_cleanup_precondition():
+    sensor = Sensor()
+    bridge = MagneticBridge(sensor)
+    try:
+        bridge.start()
+        assert bridge.command("mag_start")["outcome"] == "succeeded"
+        sensor.calsw = 1
+        assert bridge.command("mag_stop")["outcome"] == "failed"
+        assert bridge.lib.pb_stop(bridge.ctx) != 0
+        failed = bridge.batch()
+        assert failed["phase"] == "failed" and not failed["active"]
+        assert failed["calsw"] == 1 and "CALSW=1" in failed["last_error"]
+        assert failed["cleanup"]["outcome"] == "failed"
+        assert not failed["cleanup"]["write_attempted"]
+        assert sensor.calsw == 1 and sensor.writes(1, 0) == 0 and sensor.writes(0, 0) == 0
+    finally:
+        bridge.close()
+        sensor.close()
+
+
 def check_cli():
     for action, save in [("monitor", False), ("calibrate", False), ("calibrate", True)]:
         sensor = Sensor()
@@ -240,5 +260,6 @@ if __name__ == "__main__":
         environment = dict(os.environ, POSEBRIDGE_PTY_SHIM="1", DYLD_INSERT_LIBRARIES=str(shim))
         sys.exit(subprocess.call([sys.executable, "-B", __file__], env=environment))
     check_c_api()
+    check_cleanup_precondition()
     check_cli()
     print("Magnetic C ABI + CLI through fake serial: PASS")

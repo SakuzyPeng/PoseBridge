@@ -312,6 +312,12 @@ impl Connection {
     }
 
     pub(crate) async fn close(&mut self) {
+        let _ = self.close_with_timeout(Duration::from_secs(1)).await;
+    }
+
+    /// Bound unsubscribe and disconnect independently so a stalled unsubscribe
+    /// cannot prevent disconnect. The total budget is twice timeout_per_step.
+    pub(crate) async fn close_with_timeout(&mut self, timeout_per_step: Duration) -> Result<()> {
         if let Self::Ble {
             peripheral,
             notify,
@@ -321,11 +327,28 @@ impl Connection {
         {
             // Release any native connection preference before disconnecting.
             *link = None;
-            let _ =
-                tokio::time::timeout(Duration::from_secs(1), peripheral.unsubscribe(notify)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(1), peripheral.disconnect()).await;
+            close_ble(
+                peripheral.unsubscribe(notify),
+                peripheral.disconnect(),
+                timeout_per_step,
+            )
+            .await?;
         }
+        Ok(())
     }
+}
+
+async fn close_ble(
+    unsubscribe: impl Future<Output = btleplug::Result<()>>,
+    disconnect: impl Future<Output = btleplug::Result<()>>,
+    timeout_per_step: Duration,
+) -> Result<()> {
+    // Disconnect releases the subscription too, so its result is authoritative.
+    let _ = tokio::time::timeout(timeout_per_step, unsubscribe).await;
+    tokio::time::timeout(timeout_per_step, disconnect)
+        .await
+        .map_err(|_| Error::Timeout("BLE disconnect".into()))?
+        .map_err(ble_error)
 }
 
 impl Reader<'_> {
@@ -386,5 +409,63 @@ impl Writer<'_> {
                     .map_err(ble_error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::future::pending;
+
+    #[tokio::test]
+    async fn ble_close_disconnects_after_unsubscribe_timeout() {
+        let disconnected = Cell::new(false);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            close_ble(
+                pending(),
+                async {
+                    disconnected.set(true);
+                    Ok(())
+                },
+                Duration::from_millis(10),
+            ),
+        )
+        .await
+        .expect("shutdown must remain bounded");
+        assert!(result.is_ok());
+        assert!(disconnected.get());
+    }
+
+    #[tokio::test]
+    async fn ble_close_reports_disconnect_timeout_after_unsubscribe_failure() {
+        let attempted = Cell::new(false);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            close_ble(
+                async { Err(btleplug::Error::NotConnected) },
+                async {
+                    attempted.set(true);
+                    pending().await
+                },
+                Duration::from_millis(10),
+            ),
+        )
+        .await
+        .expect("disconnect must remain bounded");
+        assert!(attempted.get());
+        assert!(matches!(result, Err(Error::Timeout(message)) if message == "BLE disconnect"));
+    }
+
+    #[tokio::test]
+    async fn ble_close_reports_disconnect_failure() {
+        let result = close_ble(
+            async { Ok(()) },
+            async { Err(btleplug::Error::PermissionDenied) },
+            Duration::from_millis(10),
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Permission(_))));
     }
 }
