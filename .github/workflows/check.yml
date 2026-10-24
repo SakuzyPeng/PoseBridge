@@ -6,6 +6,8 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -26,3 +28,11 @@ jobs:
       - run: python tests/magnetic_smoke.py
       - name: C ABI and C11 consumer checks
         run: python scripts/check_c_api.py
+      - name: Package standalone client
+        run: python scripts/client.py package --skip-build --output dist/client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PoseBridge-client-${{ runner.os }}
+          path: |
+            dist/client/*.zip
+            dist/client/*.json

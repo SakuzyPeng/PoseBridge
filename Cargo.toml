@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/posebridge-core", "crates/posebridge-cli", "crates/posebridge-capi"]
+members = ["crates/posebridge-core", "crates/posebridge-cli", "crates/posebridge-capi", "crates/posebridge-client"]
 resolver = "2"
 
 [workspace.package]

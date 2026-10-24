@@ -2,6 +2,7 @@
 import itertools
 import json
 import math
+import os
 from pathlib import Path
 from runpy import run_path
 import socket
@@ -13,7 +14,7 @@ import time
 
 root = Path(__file__).resolve().parents[1]
 measure_decode = run_path(str(root / 'scripts/measure_osc.py'))['decode']
-binary = Path(sys.argv[1]) if len(sys.argv) > 1 else root / 'target/release/posebridge'
+binary = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get('CARGO_TARGET_DIR', root / 'target')) / 'release/posebridge'
 if sys.platform == 'win32' and binary.suffix != '.exe':
     binary = binary.with_suffix('.exe')
 

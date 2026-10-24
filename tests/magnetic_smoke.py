@@ -23,8 +23,9 @@ import tty
 from hardware_smoke import Bridge
 
 ROOT = Path(__file__).resolve().parents[1]
-LIBRARY = ROOT / "target/release" / ("libposebridge_capi.dylib" if sys.platform == "darwin" else "libposebridge_capi.so")
-CLI = ROOT / "target/release/posebridge"
+TARGET = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+LIBRARY = TARGET / "release" / ("libposebridge_capi.dylib" if sys.platform == "darwin" else "libposebridge_capi.so")
+CLI = TARGET / "release/posebridge"
 
 
 def until(predicate, timeout=8):
@@ -254,7 +255,7 @@ def check_cli():
 
 if __name__ == "__main__":
     if sys.platform == "darwin" and os.environ.get("POSEBRIDGE_PTY_SHIM") != "1":
-        shim = ROOT / "target/magnetic-pty-test.dylib"
+        shim = TARGET / "magnetic-pty-test.dylib"
         subprocess.run(["cc", "-dynamiclib", "-Wall", "-Wextra", "-Werror",
                         str(ROOT / "tests/magnetic_pty_macos.c"), "-o", str(shim)], check=True)
         environment = dict(os.environ, POSEBRIDGE_PTY_SHIM="1", DYLD_INSERT_LIBRARIES=str(shim))

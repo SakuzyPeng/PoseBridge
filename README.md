@@ -1,6 +1,6 @@
 # PoseBridge
 
-A Rust BLE/USB orientation bridge for WIT sensors, with OSC output, a CLI, and an experimental C ABI.
+A Rust BLE/USB orientation bridge for WIT sensors, with a desktop client, OSC output, a CLI, and an experimental C ABI.
 
 读取第三方姿态传感器的数据，转换为统一姿态并通过本机 OSC 转发，也可作为 C 动态库嵌入其他程序。
 首版支持维特 **BWT901BLECL5.0**，目标平台为 macOS Apple Silicon 和 Windows x64。
@@ -24,6 +24,12 @@ Rust 0.6 新增[磁场可视化校准接口](docs/magnetic.md)，使用独立磁
 
 PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
 macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。
+
+## 桌面客户端
+
+新增独立 `posebridge-client`：设备选择、设置读写、安装检查、磁校准、姿态预览及 OSC 输出。
+支持 macOS Apple Silicon 和 Windows x64；回正、平滑与预测由消费端负责。
+构建、打包和使用方法见[客户端指南](docs/client.md)，本轮结果见[客户端验收记录](docs/measurements/2026-10-23-client.md)。
 
 ## 快速开始
 

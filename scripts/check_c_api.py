@@ -1,5 +1,6 @@
 """Compile and exercise C ABI callers against a relocated shared library."""
 import json
+import os
 from pathlib import Path
 import select
 import shutil
@@ -9,10 +10,11 @@ import sys
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-artifacts = root / "target/release"
+target = Path(os.environ.get("CARGO_TARGET_DIR", root / "target"))
+artifacts = target / "release"
 windows = sys.platform == "win32"
 library = "posebridge_capi.dll" if windows else "libposebridge_capi.dylib" if sys.platform == "darwin" else "libposebridge_capi.so"
-with tempfile.TemporaryDirectory(prefix="c-abi-relocation-", dir=root / "target") as location:
+with tempfile.TemporaryDirectory(prefix="c-abi-relocation-", dir=target) as location:
     stage = Path(location)
     shutil.copy2(artifacts / library, stage / library)
 
