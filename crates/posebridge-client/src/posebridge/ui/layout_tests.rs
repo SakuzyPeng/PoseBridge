@@ -205,3 +205,97 @@ fn all_six_pages_draw_at_both_sizes_without_device_requests() {
         assert!(service.view().snapshot.is_none());
     }
 }
+
+#[test]
+fn completed_verification_and_errors_fit_the_footer_after_wrapping() {
+    use crate::posebridge::configuration::Progress;
+    for (width, height) in [(1000., 700.), (580., 440.)] {
+        for error in [
+            None,
+            Some("Readback did not match the requested settings. Read settings before retrying."),
+        ] {
+            let context = egui::Context::default();
+            crate::theme::install(&context);
+            let service = Service::new();
+            let mut prefs = Preferences {
+                device: Device {
+                    transport: Transport::Usb,
+                    id: "test-port".into(),
+                    mounting: [1, 2, 3],
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let view = View {
+                apply: Some(Progress {
+                    target: Settings::default(),
+                    verified: vec!["rate"],
+                    step: "All settings verified",
+                    complete: true,
+                    error: error.map(str::to_owned),
+                }),
+                ..Default::default()
+            };
+            let mut panel = Panel {
+                tab: Tab::Device,
+                baseline: Some(Settings::default()),
+                settings_device: Some((Transport::Usb, "test-port".into())),
+                ..Default::default()
+            };
+            for frame in 0..6 {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, height),
+                        )),
+                        time: Some(f64::from(frame) * 0.1),
+                        ..Default::default()
+                    },
+                    |root| {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE.inner_margin(16))
+                            .show(root, |ui| {
+                                panel.contents_with_view(
+                                    ui,
+                                    &mut prefs,
+                                    &TrackingSnapshot::default(),
+                                    &service,
+                                    &view,
+                                    true,
+                                );
+                            });
+                    },
+                );
+                output.textures_delta.clear();
+                if frame < 3 {
+                    continue;
+                }
+                for label in [
+                    "Apply changes",
+                    "Apply writes and verifies; Flash save stays separate.",
+                    error.unwrap_or("All settings verified"),
+                ] {
+                    let shape = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some((shape.clip_rect, text))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing footer text: {label}"));
+                    let rect = shape.1.galley.rect.translate(shape.1.pos.to_vec2());
+                    assert!(
+                        shape.0.expand(0.5).contains_rect(rect),
+                        "footer clips {label}: {rect:?}, clip {:?}, size {width}x{height}",
+                        shape.0
+                    );
+                    assert!(rect.bottom() <= height - 15.);
+                }
+            }
+            assert_eq!(service.view().request, 0);
+        }
+    }
+}

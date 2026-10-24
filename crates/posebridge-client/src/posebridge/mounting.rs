@@ -23,6 +23,53 @@ use crate::tracking::Quaternion;
 /// reason a motion's axis index can be used as a mounting index.
 pub const AXIS_ORDER: [&str; 3] = ["Right", "Forward", "Up"];
 
+pub const SENSOR_AXES: [i8; 6] = [-3, -2, -1, 1, 2, 3];
+
+/// Partial choices must still admit a physical rotation. Two distinct signed
+/// sensor axes always have exactly one right-handed completion.
+pub fn can_complete(selection: [i8; 3]) -> bool {
+    for (index, axis) in selection.into_iter().enumerate() {
+        if axis == 0 {
+            continue;
+        }
+        if !(1..=3).contains(&axis.unsigned_abs())
+            || selection[..index]
+                .iter()
+                .any(|other| other.unsigned_abs() == axis.unsigned_abs())
+        {
+            return false;
+        }
+    }
+    selection.contains(&0)
+        || posebridge_core::pose::Mounting {
+            right: selection[0],
+            forward: selection[1],
+            up: selection[2],
+        }
+        .validate()
+        .is_ok()
+}
+
+/// Clearing is always possible, including recovery from an invalid saved map.
+/// Other fields are never rewritten to make a proposed choice fit.
+pub fn allows_axis(mut selection: [i8; 3], index: usize, axis: i8) -> bool {
+    let Some(slot) = selection.get_mut(index) else {
+        return false;
+    };
+    *slot = axis;
+    axis == 0 || can_complete(selection)
+}
+
+pub fn selection_problem(selection: [i8; 3]) -> Option<&'static str> {
+    if !can_complete(selection) {
+        Some("Mounting directions conflict. Clear a choice or select a compatible sensor axis.")
+    } else if selection.contains(&0) {
+        Some("Choose all three mounting directions before connecting.")
+    } else {
+        None
+    }
+}
+
 /// How far a motion has to turn before it is allowed to name an axis. Below
 /// this the reading is mostly the listener breathing.
 pub const MINIMUM_DEGREES: f32 = 20.0;
@@ -233,6 +280,70 @@ pub(super) fn cross(a: [i8; 3], b: [i8; 3]) -> [i8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_offered_axis_has_a_valid_core_completion() {
+        let mut valid = Vec::new();
+        for right in SENSOR_AXES {
+            for forward in SENSOR_AXES {
+                for up in SENSOR_AXES {
+                    if (posebridge_core::pose::Mounting { right, forward, up })
+                        .validate()
+                        .is_ok()
+                    {
+                        valid.push([right, forward, up]);
+                    }
+                }
+            }
+        }
+        assert_eq!(valid.len(), 24);
+        for right in [0, -3, -2, -1, 1, 2, 3] {
+            for forward in [0, -3, -2, -1, 1, 2, 3] {
+                for up in [0, -3, -2, -1, 1, 2, 3] {
+                    let selection = [right, forward, up];
+                    for index in 0..3 {
+                        for axis in SENSOR_AXES {
+                            let mut proposed = selection;
+                            proposed[index] = axis;
+                            let possible = valid.iter().any(|basis| {
+                                proposed
+                                    .into_iter()
+                                    .zip(basis)
+                                    .all(|(selected, actual)| selected == 0 || selected == *actual)
+                            });
+                            assert_eq!(
+                                allows_axis(selection, index, axis),
+                                possible,
+                                "{selection:?}, {index}, {axis}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn old_conflicts_can_be_fixed_and_a_complete_mapping_can_be_changed() {
+        assert!(!allows_axis([-1, 2, 0], 2, 3));
+        assert!(allows_axis([-1, 2, 0], 2, -3));
+        assert!(allows_axis([-1, 2, 3], 0, 1));
+        assert!(allows_axis([-1, 2, 3], 1, -2));
+        assert!(allows_axis([-1, 2, 3], 2, -3));
+        for broken in [[1, 1, 3], [-1, 2, 3], [i8::MIN, 4, 0]] {
+            assert!(selection_problem(broken).is_some());
+            for index in 0..3 {
+                assert!(allows_axis(broken, index, 0));
+            }
+        }
+        // Change a previously complete mapping by clearing one direction;
+        // no other stored value needs to be silently changed.
+        assert!(!allows_axis([1, 2, 3], 0, -1));
+        assert!(allows_axis([1, 2, 3], 2, 0));
+        assert!(allows_axis([1, 2, 0], 0, -1));
+        assert!(allows_axis([-1, 2, 0], 2, -3));
+        assert_eq!(selection_problem([-1, 2, -3]), None);
+    }
 
     /// The identity mounting, so a test that is about the motion is not also
     /// about a mapping.

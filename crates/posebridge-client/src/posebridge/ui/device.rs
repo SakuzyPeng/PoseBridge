@@ -139,11 +139,16 @@ impl Panel {
         } else if !enabled {
             ui.small("Tracking is unavailable while a device operation is running.");
         } else if let Err(error) = configuration(&prefs.device, true) {
-            ui.small(if prefs.device.id.is_empty() {
-                "Choose a sensor and mounting on the Device page."
-            } else {
-                error.strip_prefix("invalid argument: ").unwrap_or(&error)
-            });
+            ui.colored_label(
+                crate::theme::WARNING,
+                if prefs.device.id.is_empty() {
+                    "Choose a sensor and mounting on the Device page."
+                } else {
+                    super::mounting::selection_problem(prefs.device.mounting).unwrap_or_else(|| {
+                        error.strip_prefix("invalid argument: ").unwrap_or(&error)
+                    })
+                },
+            );
         }
         if let Some(error) = self.error.as_ref().or(view.error.as_ref()) {
             ui.add(
@@ -277,22 +282,40 @@ impl Panel {
                         let ui = &mut columns[index];
                         ui.label(label);
                         egui::ComboBox::from_id_salt(("mount", index))
+                            .height(8.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y))
                             .width(ui.available_width())
                             .truncate()
                             .selected_text(axis_name(prefs.device.mounting[index]))
                             .show_ui(ui, |ui| {
-                                for axis in [-3, -2, -1, 1, 2, 3] {
-                                    ui.selectable_value(
-                                        &mut prefs.device.mounting[index],
-                                        axis,
-                                        axis_name(axis),
-                                    );
+                                ui.selectable_value(&mut prefs.device.mounting[index], 0, "Clear selection");
+                                ui.separator();
+                                for axis in super::mounting::SENSOR_AXES {
+                                    let allowed = super::mounting::allows_axis(prefs.device.mounting, index, axis);
+                                    ui.add_enabled_ui(allowed, |ui| {
+                                        ui.selectable_value(
+                                            &mut prefs.device.mounting[index],
+                                            axis,
+                                            axis_name(axis),
+                                        )
+                                    }).inner.on_disabled_hover_ui(|ui| {
+                                        ui.colored_label(crate::theme::WARNING, "Conflicts with the other selected mounting directions.");
+                                    });
                                 }
                             });
                     }
                 });
-                ui.small("Use a right-handed mounting. Check the three motions on Tracking.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(prefs.device.mounting != [0; 3], egui::Button::new("Clear choices")).clicked() {
+                        prefs.device.mounting = [0; 3];
+                    }
+                    ui.small("To change a full mapping, clear a direction first.");
+                });
+                ui.small("Conflicting options are disabled. Check the three motions on Tracking.");
             })
+            ;
+            if let Some(problem) = super::mounting::selection_problem(prefs.device.mounting) {
+                ui.colored_label(crate::theme::WARNING, problem);
+            }
         });
         ui.add_space(12.);
         section(ui, "Acquisition", |ui| {
@@ -415,6 +438,7 @@ impl Panel {
         prefs: &Preferences,
         service: &Service,
         view: &View,
+        feedback_height: f32,
     ) {
         ui.separator();
         let idle = !view.phase.busy() && view.magnetic.is_none();
@@ -461,16 +485,33 @@ impl Panel {
             }
             ui.small(format!("{count} pending"));
         });
+        // Let feedback establish its natural height, independent of the bottom
+        // panel's cached height. Otherwise a new result can get stuck in a
+        // zero-height scroll area and never enlarge that panel.
+        let feedback_rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(ui.available_width(), feedback_height),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(feedback_rect), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("pose-settings-feedback")
+                .max_height(feedback_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| self.settings_feedback(ui, view));
+        });
+    }
+
+    fn settings_feedback(&self, ui: &mut egui::Ui, view: &View) {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(crate::theme::SUCCESS, "✓ Device value");
             ui.colored_label(crate::theme::ACCENT, "• Pending change");
-            ui.small(if self.baseline.is_none() {
-                "Read settings to edit."
-            } else if view.phase == Phase::Tracking {
-                "Disconnect above to apply."
-            } else {
-                "Apply writes and verifies; Flash save stays separate."
-            });
+        });
+        ui.small(if self.baseline.is_none() {
+            "Read settings to edit."
+        } else if view.phase == Phase::Tracking {
+            "Disconnect above to apply."
+        } else {
+            "Apply writes and verifies; Flash save stays separate."
         });
         if let Some(progress) = &view.apply {
             if let Some(error) = &progress.error {
@@ -620,5 +661,133 @@ fn choice<T: PartialEq + Copy>(
         egui::RichText::new(format!("{text} •")).color(crate::theme::ACCENT)
     } else {
         egui::RichText::new(text)
+    }
+}
+
+#[cfg(test)]
+mod mounting_choice_tests {
+    use super::*;
+
+    fn frame(
+        context: &egui::Context,
+        prefs: &mut Preferences,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 600.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default()
+                    .show(root, |ui| Panel::mounting_input(ui, prefs, true));
+            },
+        );
+        output.textures_delta.clear();
+        output
+    }
+
+    fn position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()).center())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing label {label}; drawn: {:?}",
+                    output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    fn click(
+        context: &egui::Context,
+        prefs: &mut Preferences,
+        pos: egui::Pos2,
+    ) -> egui::FullOutput {
+        for pressed in [true, false] {
+            frame(
+                context,
+                prefs,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        frame(context, prefs, Vec::new())
+    }
+
+    #[test]
+    fn clicking_a_conflicting_option_does_not_store_it_and_clearing_stays_available() {
+        let context = egui::Context::default();
+        crate::theme::install(&context);
+        let mut prefs = Preferences::default();
+        prefs.device.mounting = [1, 2, 0];
+        frame(&context, &mut prefs, Vec::new());
+        let output = frame(&context, &mut prefs, Vec::new());
+        let output = click(&context, &mut prefs, position(&output, "Choose axis"));
+        let output = click(&context, &mut prefs, position(&output, "−Z"));
+        assert_eq!(prefs.device.mounting, [1, 2, 0]);
+        // A disabled click may close the popup; reopen it explicitly.
+        let has_popup = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Clear selection"));
+        let output = if has_popup {
+            output
+        } else {
+            click(&context, &mut prefs, position(&output, "Choose axis"))
+        };
+        let output = click(&context, &mut prefs, position(&output, "+Z"));
+        assert_eq!(prefs.device.mounting, [1, 2, 3]);
+        let output = click(&context, &mut prefs, position(&output, "+Z"));
+        click(&context, &mut prefs, position(&output, "Clear selection"));
+        assert_eq!(prefs.device.mounting, [1, 2, 0]);
+    }
+
+    #[test]
+    fn a_saved_conflict_is_explained_in_red_without_changing_the_mapping() {
+        let context = egui::Context::default();
+        crate::theme::install(&context);
+        let mut prefs = Preferences::default();
+        prefs.device.mounting = [-1, 2, 3];
+        let before = prefs.device.mounting;
+        let output = frame(&context, &mut prefs, Vec::new());
+        assert_eq!(prefs.device.mounting, before);
+        let message = super::super::mounting::selection_problem(before).unwrap();
+        assert!(output.shapes.iter().any(|shape| {
+            match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == message => text
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .any(|section| section.format.color == crate::theme::WARNING),
+                _ => false,
+            }
+        }));
+        let output = click(&context, &mut prefs, position(&output, "Clear choices"));
+        assert_eq!(prefs.device.mounting, [0; 3]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Choose axis")));
     }
 }

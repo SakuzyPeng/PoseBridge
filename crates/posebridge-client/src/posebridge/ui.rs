@@ -170,8 +170,20 @@ impl Panel {
         enabled: bool,
     ) {
         let view = service.view();
-        self.sync_settings(prefs, &view);
-        self.connection_bar(ui, prefs, head, service, &view, enabled);
+        self.contents_with_view(ui, prefs, head, service, &view, enabled);
+    }
+
+    fn contents_with_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        prefs: &mut Preferences,
+        head: &TrackingSnapshot,
+        service: &Service,
+        view: &View,
+        enabled: bool,
+    ) {
+        self.sync_settings(prefs, view);
+        self.connection_bar(ui, prefs, head, service, view, enabled);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.tab, Tab::Tracking, "Tracking");
@@ -181,18 +193,25 @@ impl Panel {
             ui.selectable_value(&mut self.tab, Tab::Output, "Output");
             ui.selectable_value(&mut self.tab, Tab::Diagnostics, "Diagnostics");
         });
-        self.advance_check(head, prefs, &view, enabled);
+        self.advance_check(head, prefs, view, enabled);
         ui.add_space(8.);
-        let footer = if self.tab == Tab::Device {
-            if view.apply.as_ref().is_some_and(|a| !a.complete) {
-                144.
-            } else {
-                104.
+        if self.tab == Tab::Device {
+            let available = ui.available_rect_before_wrap();
+            let feedback_height = (available.height() * 0.6).max(0.);
+            let footer = egui::Panel::bottom("pose-device-actions")
+                .frame(egui::Frame::NONE)
+                .show_separator_line(false)
+                .show(ui, |ui| {
+                    self.settings_actions(ui, prefs, service, view, feedback_height)
+                });
+            // A bottom panel learns its natural height from its contents.
+            // Settle immediately after wrapped text or operation results change,
+            // even when no device work is left to schedule another repaint.
+            if (footer.response.rect.bottom() - available.bottom()).abs() > 0.5 {
+                ui.ctx().request_repaint();
             }
-        } else {
-            0.
-        };
-        let height = (ui.available_height() - footer).max(80.);
+        }
+        let height = ui.available_height().max(0.);
         egui::ScrollArea::vertical()
             .id_salt(match self.tab {
                 Tab::Tracking => "pose-tracking",
@@ -225,10 +244,10 @@ impl Panel {
                         });
                     }
                 }
-                Tab::Device => self.device(ui, prefs, service, &view),
-                Tab::Maintenance => self.maintenance(ui, prefs, &view),
-                Tab::Magnetic => self.calibration(ui, prefs, service, &view),
-                Tab::Output => crate::output::draw(ui, &mut prefs.output, &view),
+                Tab::Device => self.device(ui, prefs, service, view),
+                Tab::Maintenance => self.maintenance(ui, prefs, view),
+                Tab::Magnetic => self.calibration(ui, prefs, service, view),
+                Tab::Output => crate::output::draw(ui, &mut prefs.output, view),
                 Tab::Diagnostics => {
                     if wide(ui) {
                         ui.columns(2, |columns| {
@@ -236,7 +255,7 @@ impl Panel {
                                 motion_diagnostics(ui, service);
                             });
                             section(&mut columns[1], "Connection details", |ui| {
-                                diagnostics(ui, &view, service);
+                                diagnostics(ui, view, service);
                             });
                         });
                     } else {
@@ -245,15 +264,12 @@ impl Panel {
                         });
                         ui.add_space(12.);
                         section(ui, "Connection details", |ui| {
-                            diagnostics(ui, &view, service);
+                            diagnostics(ui, view, service);
                         });
                     }
                 }
             });
-        if self.tab == Tab::Device {
-            self.settings_actions(ui, prefs, service, &view);
-        }
-        self.confirm_operation(ui.ctx(), service, &view);
+        self.confirm_operation(ui.ctx(), service, view);
         if view.phase.busy() || view.magnetic.is_some() {
             ui.ctx().request_repaint_after(repaint_interval(view.phase));
         }
