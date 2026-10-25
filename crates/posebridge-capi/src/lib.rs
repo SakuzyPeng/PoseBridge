@@ -255,6 +255,18 @@ pub unsafe extern "C" fn pb_stop(value: *mut PbContext) -> i32 {
     })
 }
 
+/// Set the fresh physical pose as Dolby's forward reference (PoseBridge >= 0.7).
+/// Takes effect on the next new sample; does not alter PoseBridge poses or device settings.
+/// # Safety
+/// value is live and lifecycle/control calls are serialized.
+#[no_mangle]
+pub unsafe extern "C" fn pb_dolby_recenter(value: *mut PbContext) -> i32 {
+    boundary(value, || {
+        lock(&context(value)?.controller).recenter_dolby()?;
+        Ok(())
+    })
+}
+
 /// Start device enumeration. Read completion and failure through pb_status/pb_snapshot_json.
 /// # Safety
 /// value is live and lifecycle/configuration calls are serialized.

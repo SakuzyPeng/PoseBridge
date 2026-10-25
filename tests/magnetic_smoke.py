@@ -156,7 +156,9 @@ def check_c_api():
         until(lambda: int(bridge.batch()["cursor"]["sequence"]) > int(stopped["cursor"]["sequence"]))
         assert bridge.batch()["statistics"] == stopped["statistics"]
         assert bridge.command("save")["persistence"] == "unverified"
-        assert sensor.writes(0, 0) == 1
+        # Sent is not an acknowledgement: allow the independent PTY peer to
+        # consume the write before asserting its exact count.
+        until(lambda: sensor.writes(0, 0) == 1)
         assert bridge.lib.pb_stop(bridge.ctx) == 0
         closed = bridge.batch()
         assert closed["phase"] == "closed" and not closed["active"]

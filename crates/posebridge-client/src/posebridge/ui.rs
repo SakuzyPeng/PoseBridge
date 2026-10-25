@@ -247,7 +247,11 @@ impl Panel {
                 Tab::Device => self.device(ui, prefs, service, view),
                 Tab::Maintenance => self.maintenance(ui, prefs, view),
                 Tab::Magnetic => self.calibration(ui, prefs, service, view),
-                Tab::Output => crate::output::draw(ui, &mut prefs.output, view),
+                Tab::Output => {
+                    if crate::output::draw(ui, &mut prefs.output, view) {
+                        self.send(service, Command::RecenterDolby);
+                    }
+                }
                 Tab::Diagnostics => {
                     if wide(ui) {
                         ui.columns(2, |columns| {

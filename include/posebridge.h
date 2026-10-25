@@ -144,6 +144,14 @@ int32_t pb_start(struct PbContext *value);
 int32_t pb_stop(struct PbContext *value);
 
 /**
+ * Set the fresh physical pose as Dolby's forward reference (PoseBridge >= 0.7).
+ * Takes effect on the next new sample; does not alter PoseBridge poses or device settings.
+ * # Safety
+ * value is live and lifecycle/control calls are serialized.
+ */
+int32_t pb_dolby_recenter(struct PbContext *value);
+
+/**
  * Start device enumeration. Read completion and failure through pb_status/pb_snapshot_json.
  * # Safety
  * value is live and lifecycle/configuration calls are serialized.

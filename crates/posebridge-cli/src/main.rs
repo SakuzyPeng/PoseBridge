@@ -147,6 +147,7 @@ impl InputArgs {
                 Input::StreamQuaternion => PoseInput::StreamQuaternion,
             },
             osc: None,
+            dolby_osc: None,
         })
     }
 }
@@ -160,6 +161,22 @@ struct OutputArgs {
     osc_rate_hz: u32,
     #[arg(long, value_enum, default_value = "quaternion")]
     format: Format,
+    /// Also send /ypr degrees to a Dolby OSC head tracker (usually 127.0.0.1:8000).
+    #[arg(long)]
+    dolby_target: Option<SocketAddr>,
+    #[arg(long, default_value_t = 100)]
+    dolby_rate_hz: u32,
+}
+impl OutputArgs {
+    fn apply(self, config: &mut Config) {
+        config.dolby_osc = self
+            .dolby_target
+            .map(|target| posebridge_core::DolbyOscConfig {
+                target,
+                max_rate_hz: self.dolby_rate_hz,
+            });
+        config.osc = Some(self.into());
+    }
 }
 impl From<OutputArgs> for OscConfig {
     fn from(v: OutputArgs) -> Self {
@@ -370,6 +387,21 @@ fn stream(
             } else {
                 let angles = pose.as_ref().map(|p| p.euler_deg);
                 let raw = pose.as_ref().and_then(|p| p.raw.euler_xyz_deg);
+                if let Some(dolby) = &status.dolby_osc {
+                    println!(
+                        "Dolby sent={} coalesced={} errors={} forward_set={} last_ypr_deg={:?}{}",
+                        dolby.sent,
+                        dolby.coalesced_samples,
+                        dolby.send_errors,
+                        dolby.reference_set,
+                        dolby.last_ypr_deg,
+                        dolby
+                            .last_error
+                            .as_ref()
+                            .map(|e| format!(" error={e}"))
+                            .unwrap_or_default()
+                    );
+                }
                 println!(
                     "{:?} session={} samples={} rate={:.2}Hz osc={} yaw/pitch/roll={:?} raw XYZ={:?} sample_time={:?} battery={}{}",
                     status.state,
@@ -681,7 +713,7 @@ fn run() -> Result<()> {
             json,
         } => {
             let mut config = input.config(true)?;
-            config.osc = Some(output.into());
+            output.apply(&mut config);
             stream(&mut controller, config, duration, json, &interrupted)
         }
         Command::Simulate {
@@ -696,7 +728,7 @@ fn run() -> Result<()> {
             duration,
             json,
         } => {
-            let config = Config {
+            let mut config = Config {
                 source_id,
                 source: Source::Simulate {
                     pattern: match pattern {
@@ -709,9 +741,9 @@ fn run() -> Result<()> {
                     rate_hz: sample_rate_hz,
                     sample_clock,
                 },
-                osc: Some(output.into()),
                 ..Config::default()
             };
+            output.apply(&mut config);
             stream(&mut controller, config, duration, json, &interrupted)
         }
         Command::Configure {

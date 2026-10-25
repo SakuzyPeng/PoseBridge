@@ -4,6 +4,7 @@ mod battery;
 mod ble_link;
 mod controller;
 mod device;
+mod dolby;
 mod model;
 mod motion;
 pub mod osc;

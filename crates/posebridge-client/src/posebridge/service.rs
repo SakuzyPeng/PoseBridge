@@ -2,6 +2,7 @@
 use super::configuration::{Action as ApplyAction, Apply, Progress as ApplyProgress, Settings};
 use super::magnetic;
 use super::{Device, Input, Sample, Transport};
+use crate::output::Configuration as Outputs;
 use posebridge_core as pb;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
@@ -104,8 +105,10 @@ pub enum Command {
     Simulate {
         rate: u32,
         osc: Option<pb::OscConfig>,
+        dolby_osc: Option<pb::DolbyOscConfig>,
     },
-    Connect(Device, Option<pb::OscConfig>),
+    Connect(Device, Outputs),
+    RecenterDolby,
     Inspect(Device),
     /// Open a read-only magnetic session. Starting, ending and saving a
     /// calibration are then ordinary `Write`s to the same device, which the
@@ -155,9 +158,21 @@ impl Service {
         lock(&self.view).clone()
     }
     pub fn send(&self, command: Command) -> Result<(), String> {
-        if let Command::Connect(device, osc) = &command {
+        if matches!(command, Command::RecenterDolby) {
+            let mut view = lock(&self.view);
+            admit(&view, &command)?;
+            self.sender
+                .try_send(Request {
+                    id: view.request,
+                    command,
+                })
+                .map_err(|e| format!("Device worker: {e}"))?;
+            view.error = None;
+            return Ok(());
+        }
+        if let Command::Connect(device, outputs) = &command {
             let mut config = configuration(device, true)?;
-            config.osc = osc.clone();
+            outputs.apply(&mut config);
             config.validate().map_err(|e| e.to_string())?;
         }
         if let Command::Apply(_, _, settings) = &command {
@@ -214,6 +229,28 @@ impl Drop for Service {
 }
 /// Whether `command` may start now, and the phase it leaves the worker in.
 fn admit(v: &View, command: &Command) -> Result<Phase, String> {
+    if matches!(command, Command::RecenterDolby) {
+        if v.phase != Phase::Tracking || v.magnetic.is_some() {
+            return Err("Connect with Dolby output enabled to set forward.".into());
+        }
+        let snapshot = v
+            .snapshot
+            .as_ref()
+            .ok_or("Waiting for the sensor connection.")?;
+        if !snapshot
+            .status
+            .dolby_osc
+            .as_ref()
+            .is_some_and(|status| status.active)
+        {
+            return Err("Dolby output is not running. Enable it before connecting.".into());
+        }
+        if !snapshot.pose.as_ref().is_some_and(|pose| pose.fresh) {
+            return Err("A fresh sensor pose is required to set Dolby forward.".into());
+        }
+        return Ok(Phase::Tracking);
+    }
+
     if v.session_write_pending && !matches!(command, Command::Stop | Command::Shutdown) {
         return Err("Waiting for the last operation to finish.".into());
     }
@@ -239,7 +276,7 @@ fn admit(v: &View, command: &Command) -> Result<Phase, String> {
         Command::Scan(_) => Phase::Scanning,
         #[cfg(test)]
         Command::Simulate { .. } => Phase::Tracking,
-        Command::Connect(_, _) => Phase::Tracking,
+        Command::Connect(_, _) | Command::RecenterDolby => Phase::Tracking,
         Command::Inspect(_) => Phase::Inspecting,
         Command::Magnetic(_) => Phase::Magnetic,
         Command::Write(_, _) if into_session => Phase::Magnetic,
@@ -284,6 +321,7 @@ pub fn configuration(device: &Device, acquisition: bool) -> Result<pb::Config, S
         },
         mounting: acquisition.then_some(mounting),
         osc: None,
+        dolby_osc: None,
     };
     config.validate().map_err(|e| e.to_string())?;
     Ok(config)
@@ -367,7 +405,7 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
     let mut latest = None::<Sample>;
     let mut phase = Phase::Idle;
     let mut device = None::<Device>;
-    let mut pending_connect = None::<(Device, Option<pb::OscConfig>)>;
+    let mut pending_connect = None::<(Device, Outputs)>;
     let mut pending_apply = None::<Apply>;
     let mut session = None::<magnetic::Run>;
     let mut last_view = Instant::now();
@@ -380,6 +418,25 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
             Duration::from_millis(20)
         };
         match receiver.recv_timeout(delay) {
+            Ok(Request {
+                id,
+                command: Command::RecenterDolby,
+            }) => {
+                if lock(view).request == id {
+                    let result = controller
+                        .as_ref()
+                        .ok_or_else(|| "Sensor connection is not running".to_owned())
+                        .and_then(|c| c.recenter_dolby().map_err(|e| e.to_string()));
+                    let mut v = lock(view);
+                    if v.request == id {
+                        v.error = result.err();
+                    }
+                    last_view = Instant::now()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap_or_else(Instant::now);
+                }
+            }
+
             Ok(Request {
                 id,
                 command: Command::Write(target, operation),
@@ -444,7 +501,11 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                     }
                     match request.command {
                         #[cfg(test)]
-                        Command::Simulate { rate, osc } => {
+                        Command::Simulate {
+                            rate,
+                            osc,
+                            dolby_osc,
+                        } => {
                             c.set_config(pb::Config {
                                 source: pb::Source::Simulate {
                                     pattern: pb::Pattern::Combined,
@@ -453,6 +514,7 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                                     sample_clock: true,
                                 },
                                 osc,
+                                dolby_osc,
                                 ..pb::Config::default()
                             })
                             .map_err(|e| e.to_string())?;
@@ -475,12 +537,12 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                             .map_err(|e| e.to_string())?;
                             phase = Phase::Scanning;
                         }
-                        Command::Connect(d, osc) => {
+                        Command::Connect(d, outputs) => {
                             c.set_config(configuration(&d, true)?)
                                 .map_err(|e| e.to_string())?;
                             c.inspect_start().map_err(|e| e.to_string())?;
                             device = Some(d.clone());
-                            pending_connect = Some((d, osc));
+                            pending_connect = Some((d, outputs));
                             phase = Phase::Tracking;
                         }
                         Command::Inspect(d) => {
@@ -521,7 +583,7 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                             device = Some(d);
                             phase = Phase::Operating;
                         }
-                        Command::Shutdown => unreachable!(),
+                        Command::Shutdown | Command::RecenterDolby => unreachable!(),
                     }
                     Ok(())
                 })();
@@ -592,7 +654,7 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                 phase = Phase::Failed;
                 pending_apply = None;
             }
-        } else if let Some((d, osc)) = pending_connect.clone() {
+        } else if let Some((d, outputs)) = pending_connect.clone() {
             if snapshot.status.state == pb::ConnectionState::Complete {
                 let result = (|| -> Result<(), String> {
                     if snapshot.descriptor.device.calsw == Some(7) {
@@ -601,7 +663,7 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                         );
                     }
                     let mut config = configuration(&d, true)?;
-                    config.osc = osc;
+                    outputs.apply(&mut config);
                     config.validate().map_err(|e| e.to_string())?;
                     config.pose_input = observed_input(&d, &snapshot.descriptor.device)?;
                     start_acquisition(c, config).map_err(|e| e.to_string())
@@ -688,6 +750,12 @@ fn worker(receiver: &mpsc::Receiver<Request>, view: &Mutex<View>, sample: &Mutex
                 v.error = None;
             } else if let Some(error) = &snapshot.status.last_error {
                 v.error = Some(error.clone());
+            } else if v
+                .error
+                .as_ref()
+                .is_some_and(|error| error.starts_with("PoseBridge OSC:"))
+            {
+                v.error = None;
             }
             v.devices = c.devices();
             v.snapshot = Some(snapshot);
@@ -794,6 +862,7 @@ mod lifecycle_tests {
             .send(Command::Simulate {
                 rate: 100,
                 osc: None,
+                dolby_osc: None,
             })
             .unwrap();
         until(|| {
@@ -812,6 +881,7 @@ mod lifecycle_tests {
             .send(Command::Simulate {
                 rate: 100,
                 osc: None,
+                dolby_osc: None,
             })
             .unwrap();
         until(|| {
@@ -944,7 +1014,7 @@ mod magnetic_tests {
         for refused in [
             Command::Write(device.clone(), ZeroYaw),
             Command::Write(other, MagStart),
-            Command::Connect(device.clone(), None),
+            Command::Connect(device.clone(), Outputs::default()),
             Command::Magnetic(device.clone()),
         ] {
             assert!(admit(&open, &refused).is_err());
@@ -1058,7 +1128,13 @@ mod magnetic_tests {
             Ok(Phase::Magnetic)
         );
         assert!(admit(&latched, &Command::Magnetic(other)).is_err());
-        assert!(admit(&latched, &Command::Connect(device.clone(), None)).is_err());
+        assert!(
+            admit(
+                &latched,
+                &Command::Connect(device.clone(), Outputs::default())
+            )
+            .is_err()
+        );
         let watching = View {
             phase: Phase::Magnetic,
             device: Some(device.clone()),
@@ -1119,7 +1195,9 @@ mod hardware_tests {
         )
         .unwrap();
         let service = Service::new();
-        service.send(Command::Connect(device, None)).unwrap();
+        service
+            .send(Command::Connect(device, Outputs::default()))
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let view = service.view();
@@ -1272,6 +1350,7 @@ mod output_tests {
                     format: pb::OscFormat::Quaternion,
                     max_rate_hz: 100,
                 }),
+                dolby_osc: None,
             })
             .unwrap();
         let mut sequence = 0;
@@ -1353,10 +1432,66 @@ mod output_tests {
         };
         assert!(
             service
-                .send(Command::Connect(device, Some(output)))
+                .send(Command::Connect(
+                    device,
+                    Outputs {
+                        posebridge: Some(output),
+                        dolby: None
+                    }
+                ))
                 .is_err()
         );
         assert_eq!(service.view().request, 0);
         assert!(service.view().snapshot.is_none());
+    }
+}
+
+#[cfg(test)]
+mod dolby_control_tests {
+    use super::*;
+    use std::net::UdpSocket;
+    #[test]
+    fn setting_dolby_forward_keeps_the_acquisition_request_and_samples() {
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let service = Service::new();
+        service
+            .send(Command::Simulate {
+                rate: 100,
+                osc: None,
+                dolby_osc: Some(pb::DolbyOscConfig {
+                    target: target.local_addr().unwrap(),
+                    max_rate_hz: 50,
+                }),
+            })
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(3);
+        while !service.view().admits(&Command::RecenterDolby) {
+            assert!(Instant::now() < end);
+            thread::sleep(Duration::from_millis(3));
+        }
+        let request = service.view().request;
+        let sample = lock(&service.sample).clone().unwrap();
+        service.send(Command::RecenterDolby).unwrap();
+        assert_eq!(service.view().request, request);
+        assert!(lock(&service.sample).is_some());
+        while !service
+            .view()
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.status.dolby_osc.as_ref())
+            .is_some_and(|s| s.reference_set)
+        {
+            assert!(Instant::now() < end);
+            thread::sleep(Duration::from_millis(3));
+        }
+        let after = lock(&service.sample).clone().unwrap();
+        assert_eq!(
+            (sample.instance, sample.session, sample.reference),
+            (after.instance, after.session, after.reference)
+        );
+        assert_eq!(service.view().request, request);
+        assert_eq!(service.view().phase, Phase::Tracking);
+        service.send(Command::Stop).unwrap();
+        assert!(service.send(Command::RecenterDolby).is_err());
     }
 }

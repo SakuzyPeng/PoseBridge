@@ -14,7 +14,7 @@ A Rust BLE/USB orientation bridge for WIT sensors, with a desktop client, OSC ou
 - 四元数／欧拉角 OSC 输出、时间戳、来源描述与独立状态心跳，以及无设备模拟器。
 - Rust 核心库、CLI、实验性 C ABI 0.4（版本 400），以及可运行的 C11 消费示例。
 
-当前 OSC 协议为 3，C ABI 为 400，本地 JSON 快照 schema 为 4。快照提供查询时的 `age_ns`，方便消费方设置时效阈值。
+当前 PoseBridge OSC 协议为 3，C ABI 为 400，本地 JSON 快照 schema 为 4。快照提供查询时的 `age_ns`，方便消费方设置时效阈值。
 只支持当前接口；旧地址、旧结构和 `--osc-version` 已移除，C 调用方须同步升级头文件与动态库。
 
 Rust 0.5 新增[同帧运动批次接口](docs/motion.md)：物理四元数、角速度、加速度与设备时间戳；C ABI 400、OSC 3 及 JSON schema 4 保持原布局。
@@ -22,13 +22,16 @@ Rust 0.5 新增[同帧运动批次接口](docs/motion.md)：物理四元数、�
 Rust 0.6 新增[磁场可视化校准接口](docs/magnetic.md)，使用独立磁场批次 JSON schema 1。
 新 C 导出要求升级到 0.6 动态库，已有 C ABI 400 结构布局保持不变。
 
-PoseBridge 使用设备提供的姿态解算结果，回正、用户侧平滑和音频渲染由接收软件负责。
+PoseBridge 使用设备提供的姿态解算结果；原有 OSC 一路的回正、用户侧平滑和音频渲染由接收软件负责。
 macOS 与 Windows 的原生检查、BLE／USB 实机读取均已通过，详细结果与待验证项见[验证记录](docs/validation.md)。
+
+Rust 0.7 新增 [Dolby Atmos Renderer 双路 OSC 输出与独立回正](docs/dolby.md)，与现有 PoseBridge 接收端同时使用同一份采样。
+本轮检查与实机覆盖见 [0.7 验证记录](docs/measurements/2026-10-25-dolby.md)。
 
 ## 桌面客户端
 
 新增独立 `posebridge-client`：设备选择、设置读写、安装检查、磁校准、姿态预览及 OSC 输出。
-支持 macOS Apple Silicon 和 Windows x64；回正、平滑与预测由消费端负责。
+支持 macOS Apple Silicon 和 Windows x64；PoseBridge 一路的回正、平滑与预测由消费端负责，Dolby 一路提供独立回正。
 构建、打包和使用方法见[客户端指南](docs/client.md)，本轮结果见[客户端验收记录](docs/measurements/2026-10-23-client.md)。
 
 ## 快速开始

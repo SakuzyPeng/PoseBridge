@@ -49,7 +49,7 @@ impl Store {
                     serde_json::from_slice::<Document>(&bytes).map_err(|e| e.to_string())
                 })
                 .and_then(|doc| {
-                    if doc.version == 1 {
+                    if matches!(doc.version, 1 | 2) {
                         Ok(doc.preferences)
                     } else {
                         Err(format!("Unsupported preferences version {}", doc.version))
@@ -77,7 +77,7 @@ impl Store {
             return Ok(());
         }
         let bytes = serde_json::to_vec_pretty(&Document {
-            version: 1,
+            version: 2,
             preferences: prefs.clone(),
         })
         .map_err(|e| e.to_string())?;
@@ -110,6 +110,22 @@ mod tests {
         let (_s, q, _) = Store::open(Some(dir.path().into())).unwrap();
         assert_eq!(p, q);
     }
+    #[test]
+    fn version_one_migrates_to_two_with_dolby_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"version":1,"preferences":{"output":{"enabled":true,"target":"127.0.0.1:9900","format":"Euler","max_rate_hz":50}}}"#).unwrap();
+        let (s, p, w) = Store::open(Some(dir.path().into())).unwrap();
+        assert!(w.is_none());
+        assert!(p.output.enabled);
+        assert_eq!(p.output.target, "127.0.0.1:9900");
+        assert!(!p.output.dolby.enabled);
+        s.save(&p).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["preferences"]["output"]["dolby"]["enabled"], false);
+    }
+
     #[test]
     fn invalid_or_future_settings_are_not_overwritten() {
         for content in ["broken", r#"{"version":99,"preferences":{}}"#] {

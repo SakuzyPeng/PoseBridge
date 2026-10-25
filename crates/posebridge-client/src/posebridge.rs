@@ -52,6 +52,7 @@ pub struct Preferences {
 impl Preferences {
     pub fn validate(&mut self) {
         self.output.max_rate_hz = self.output.max_rate_hz.clamp(1, 200);
+        self.output.dolby.max_rate_hz = self.output.dolby.max_rate_hz.clamp(1, 200);
         for device in std::iter::once(&mut self.device).chain(self.remembered.iter_mut()) {
             if device.baud == 0 {
                 device.baud = 115_200;

@@ -1,6 +1,6 @@
 # PoseBridge C ABI 400（experimental）
 
-Rust 包 0.6 沿用 0.4 的 C ABI 400，结构布局与 OSC 3 均不变。运动批次接口仅供 Rust 进程内消费者。
+Rust 包 0.7 沿用 0.4 的 C ABI 400，结构布局与 OSC 3 均不变。运动批次接口仅供 Rust 进程内消费者。
 0.6 新增 `pb_magnetic_start` 和 `pb_magnetic_since_json`，要求升级动态库；见[磁场接口](magnetic.md)。
 
 头文件 [posebridge.h](../include/posebridge.h) 由 cbindgen 生成；`pb_abi_version()` 必须等于 **400**。
@@ -90,3 +90,9 @@ valid 表示成功读取且未被本上下文已知的变化作废，不保证�
 
 [真实 C 调用测试](../tests/c_api_smoke.c)覆盖版本、布局、缓冲区、年龄、原子 JSON、忙状态、停止及新实例。
 [C11 消费示例](consumer.md)提供控制线程轮询与宿主接入点。
+
+## Dolby 独立回正（0.7）
+
+配置 JSON 可新增可选 `dolby_osc`，与 `osc` 同时发送。`pb_dolby_recenter(ctx)` 要求新鲜姿态和已运行的 Dolby 输出，
+于下一份新采样生效；只改变 Dolby 参考，不写设备、不改变 PbPose 或 PoseBridge 的参考代次。
+新导出要求 0.7 动态库；C ABI 400 结构布局保持不变。配置、状态字段及使用步骤见 [Dolby 指南](dolby.md)。

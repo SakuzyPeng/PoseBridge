@@ -58,6 +58,7 @@ def notices(cargo, destination, platform):
     shutil.copy2(ROOT / 'crates/posebridge-client/assets/OFL.txt', destination / 'FONT-LICENSE.txt')
     shutil.copy2(ROOT / 'crates/posebridge-client/assets/PLAYER-LICENSE.txt', destination / 'PLAYER-LICENSE.txt')
     shutil.copy2(ROOT / 'docs/client.md', destination / '使用说明.md')
+    shutil.copy2(ROOT / 'docs/dolby.md', destination / 'dolby.md')
 
 
 def verify(binary, directory, smoke):

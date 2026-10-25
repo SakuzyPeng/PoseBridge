@@ -117,6 +117,37 @@ pub struct OscConfig {
     pub format: OscFormat,
 }
 
+/// Dolby's OSC head tracker accepts a single /ypr message in degrees.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DolbyOscConfig {
+    pub target: SocketAddr,
+    pub max_rate_hz: u32,
+}
+impl Default for DolbyOscConfig {
+    fn default() -> Self {
+        Self {
+            target: SocketAddr::from(([127, 0, 0, 1], 8000)),
+            max_rate_hz: default_rate(),
+        }
+    }
+}
+
+/// Local Dolby output state. Sent counts UDP handoffs, not receiver acknowledgements.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DolbyOscStatus {
+    pub active: bool,
+    #[serde(serialize_with = "decimal::serialize")]
+    pub sent: u64,
+    #[serde(serialize_with = "decimal::serialize")]
+    pub coalesced_samples: u64,
+    #[serde(serialize_with = "decimal::serialize")]
+    pub send_errors: u64,
+    pub reference_set: bool,
+    pub last_ypr_deg: Option<[f64; 3]>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -130,6 +161,8 @@ pub struct Config {
     pub mounting: Option<Mounting>,
     #[serde(default)]
     pub osc: Option<OscConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dolby_osc: Option<DolbyOscConfig>,
 }
 
 impl Default for Config {
@@ -145,6 +178,7 @@ impl Default for Config {
             pose_input: PoseInput::Euler,
             mounting: None,
             osc: None,
+            dolby_osc: None,
         }
     }
 }
@@ -183,6 +217,14 @@ impl Config {
             if !osc.target.ip().is_loopback() || osc.target.port() == 0 {
                 return Err(Error::Invalid(
                     "OSC target must be a nonzero loopback port".into(),
+                ));
+            }
+        }
+        if let Some(osc) = &self.dolby_osc {
+            validate_rate(osc.max_rate_hz)?;
+            if !osc.target.ip().is_loopback() || osc.target.port() == 0 {
+                return Err(Error::Invalid(
+                    "Dolby OSC target must be a nonzero loopback port".into(),
                 ));
             }
         }
@@ -363,6 +405,8 @@ pub struct StatusSnapshot {
     pub delivery: DeliveryStats,
     pub ble_link: Option<BleLinkStatus>,
     pub battery: BatteryStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dolby_osc: Option<DolbyOscStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

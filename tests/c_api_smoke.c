@@ -19,9 +19,11 @@ int main(void) {
     assert(offsetof(PbPose, instance_id) == 16 && offsetof(PbPose, age_ns) == 80);
     assert(offsetof(PbPose, quaternion_xyzw) == 88);
     assert(pb_context_create(NULL) == PB_INVALID_ARGUMENT);
+    assert(pb_dolby_recenter(NULL) == PB_INVALID_ARGUMENT);
     PbContext *ctx = NULL; assert(pb_context_create(&ctx) == PB_OK);
     PbPose p = {0}; p.struct_size = sizeof(p);
     assert(pb_latest_pose(ctx, &p) == PB_NO_DATA);
+    assert(pb_dolby_recenter(ctx) == PB_UNAVAILABLE);
     p.struct_size = 4; assert(pb_latest_pose(ctx, &p) == PB_BUFFER_TOO_SMALL && p.struct_size == 4);
     memset(&p, 0xa5, sizeof(p)); p.struct_size = 184;
     unsigned char old_capacity[sizeof(p)]; memcpy(old_capacity, &p, sizeof(p));

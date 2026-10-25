@@ -9,6 +9,10 @@ pub(crate) struct TimerResolution(bool);
 impl TimerResolution {
     pub(crate) fn for_config(config: &Config) -> Result<Self> {
         let needed = config.osc.as_ref().is_some_and(|osc| osc.max_rate_hz > 50)
+            || config
+                .dolby_osc
+                .as_ref()
+                .is_some_and(|osc| osc.max_rate_hz > 50)
             || matches!(config.source, Source::Simulate { rate_hz, .. } if rate_hz > 50)
             || config.pose_input == PoseInput::Quaternion;
         if needed {

@@ -34,6 +34,8 @@ struct Shared {
     motion: History,
     battery: Battery,
     magnetic: magnetic::State,
+    physical: Option<pose::Quat>,
+    dolby: Option<crate::dolby::Sender>,
 }
 type SharedRef = Arc<Mutex<Shared>>;
 
@@ -124,6 +126,8 @@ impl Controller {
             s.motion = History::default();
             s.magnetic = magnetic::State::default();
             s.pose = None;
+            s.physical = None;
+            s.dolby = None;
             s.last_pose = None;
             s.status = StatusSnapshot::default();
             s.battery = Battery::default();
@@ -145,18 +149,45 @@ impl Controller {
             s.status = StatusSnapshot::default();
             s.battery = Battery::default();
             s.status.state = ConnectionState::Connecting;
+            s.status.dolby_osc = config.dolby_osc.as_ref().map(|_| DolbyOscStatus::default());
             s.descriptor.instance_id = new_id();
             s.descriptor.session_id = 0;
             s.descriptor.metadata_revision += 1;
             s.motion = History::default();
             s.magnetic = magnetic::State::default();
             s.pose = None;
+            s.physical = None;
+            s.dolby = None;
             s.last_pose = None;
             s.first_pose = None;
         }
         self.launch(config.osc.clone(), move |shared, cancel| {
             run(config, shared, cancel)
         });
+        Ok(())
+    }
+
+    /// Set the current fresh physical orientation as Dolby's forward reference.
+    /// Only the Dolby output is affected; it takes effect on the next new sample.
+    pub fn recenter_dolby(&self) -> Result<()> {
+        let mut state = lock(&self.shared);
+        let now = Instant::now();
+        if !fresh(&state, now) {
+            return Err(Error::Unavailable(
+                "A fresh sensor pose is required to set Dolby forward".into(),
+            ));
+        }
+        let pose =
+            pose_at(&state, now).ok_or_else(|| Error::Unavailable("No sensor pose".into()))?;
+        let physical = state
+            .physical
+            .ok_or_else(|| Error::Unavailable("No physical sensor orientation".into()))?;
+        let output = state
+            .dolby
+            .as_mut()
+            .ok_or_else(|| Error::Unavailable("Dolby output is not running".into()))?;
+        output.recenter(&pose, physical)?;
+        state.status.dolby_osc = Some(output.status());
         Ok(())
     }
 
@@ -312,6 +343,8 @@ impl Controller {
             s.motion = History::default();
             s.battery = Battery::default();
             s.pose = None;
+            s.physical = None;
+            s.dolby = None;
             s.last_pose = None;
             s.first_pose = None;
             s.operation = None;
@@ -394,6 +427,10 @@ impl Controller {
                         },
                     }
                 }
+                {
+                    let mut s = lock(&shared);
+                    retire_dolby(&mut s);
+                }
                 send_telemetry(&shared, &mut telemetry, true);
             });
         self.task = Some(Task {
@@ -413,6 +450,7 @@ impl Controller {
                 let mut s = lock(&self.shared);
                 s.status.state = ConnectionState::Failed;
                 s.status.last_error = Some("stop timed out; worker aborted".into());
+                retire_dolby(&mut s);
                 if magnetic {
                     s.magnetic.finish(Some(
                         "stop timed out; device calibration state unknown".into(),
@@ -427,7 +465,9 @@ impl Controller {
                 return Err(Error::Io(error.clone()));
             }
         }
-        lock(&self.shared).status.state = ConnectionState::Stopped;
+        let mut s = lock(&self.shared);
+        s.status.state = ConnectionState::Stopped;
+        retire_dolby(&mut s);
         Ok(())
     }
 
@@ -612,6 +652,11 @@ fn send_telemetry(shared: &SharedRef, telemetry: &mut Option<Telemetry>, force: 
 
 fn begin_session(shared: &SharedRef) {
     let mut s = lock(shared);
+    s.physical = None;
+    if let Some(output) = s.dolby.as_mut() {
+        output.clear_reference();
+        s.status.dolby_osc = Some(output.status());
+    }
     if s.descriptor.session_id != 0 {
         s.descriptor.reference_epoch += 1;
         s.descriptor.reference_reason = "reconnected".into();
@@ -690,6 +735,10 @@ fn publish_locked(
         0.0
     };
     s.status.state = ConnectionState::Active;
+    s.physical = Some(signals.as_ref().map_or_else(
+        || pose::physical_from_euler(euler),
+        |value| Ok(value.orientation),
+    )?);
     s.pose = Some(PoseSnapshot {
         instance_id: s.descriptor.instance_id,
         reference_epoch: s.descriptor.reference_epoch,
@@ -733,24 +782,75 @@ fn publish_locked(
     Ok(())
 }
 
+fn retire_dolby(s: &mut Shared) {
+    if let Some(mut output) = s.dolby.take() {
+        output.clear_reference();
+        let mut status = output.status();
+        status.active = false;
+        s.status.dolby_osc = Some(status);
+    }
+}
+
+fn output_deadline(shared: &SharedRef, sender: &Option<Sender>) -> Option<Instant> {
+    let primary = sender.as_ref().and_then(Sender::deadline);
+    let dolby = lock(shared)
+        .dolby
+        .as_ref()
+        .and_then(crate::dolby::Sender::deadline);
+    primary.into_iter().chain(dolby).min()
+}
+
 fn emit(shared: &SharedRef, sender: &mut Option<Sender>) -> Result<()> {
-    let (pose, source_id, now) = {
+    let (pose, physical, source_id, now) = {
         let s = lock(shared);
         let now = Instant::now();
-        (pose_at(&s, now), s.descriptor.source_id.clone(), now)
+        (
+            pose_at(&s, now),
+            s.physical,
+            s.descriptor.source_id.clone(),
+            now,
+        )
     };
     if let Some(sender) = sender {
         let previous_errors = sender.send_errors();
-        let sent = if let Some(pose) = pose {
-            sender.send_if_due(&pose, &source_id, pose.age_ns, now)?
+        let result = if let Some(pose) = &pose {
+            sender.send_if_due(pose, &source_id, pose.age_ns, now)
         } else {
             sender.clear_pending();
-            false
+            Ok(false)
         };
         let mut s = lock(shared);
-        s.status.osc_sent += u64::from(sent);
         s.status.coalesced_samples = sender.coalesced_samples();
         s.status.send_errors += sender.send_errors() - previous_errors;
+        match result {
+            Ok(true) => {
+                s.status.osc_sent += 1;
+                if s.status
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.starts_with("PoseBridge OSC:"))
+                {
+                    s.status.last_error = None;
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                if sender.send_errors() == previous_errors {
+                    s.status.send_errors += 1;
+                }
+                s.status.last_error = Some(format!("PoseBridge OSC: {error}"));
+                sender.clear_pending();
+            }
+        }
+    }
+    let mut s = lock(shared);
+    if let Some(output) = s.dolby.as_mut() {
+        if let (Some(pose), Some(physical)) = (&pose, physical) {
+            output.send_if_due(pose, physical, now);
+        } else {
+            output.clear_pending();
+        }
+        s.status.dolby_osc = Some(output.status());
     }
     Ok(())
 }
@@ -832,7 +932,35 @@ impl FullFrameRate {
 async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool>) -> Result<()> {
     #[cfg(target_os = "windows")]
     let _timer_resolution = crate::timing::TimerResolution::for_config(&config)?;
-    let mut sender = config.osc.clone().map(Sender::new).transpose()?;
+    let mut sender = config
+        .osc
+        .clone()
+        .and_then(|config| match Sender::new(config) {
+            Ok(sender) => Some(sender),
+            Err(error) => {
+                let mut s = lock(&shared);
+                s.status.send_errors += 1;
+                s.status.last_error = Some(format!("PoseBridge OSC: {error}"));
+                None
+            }
+        });
+    if let Some(config) = &config.dolby_osc {
+        let result = crate::dolby::Sender::new(config);
+        let mut s = lock(&shared);
+        match result {
+            Ok(output) => {
+                s.status.dolby_osc = Some(output.status());
+                s.dolby = Some(output);
+            }
+            Err(error) => {
+                s.status.dolby_osc = Some(DolbyOscStatus {
+                    send_errors: 1,
+                    last_error: Some(error.to_string()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
     if let Source::Simulate {
         pattern,
         euler_deg,
@@ -846,7 +974,7 @@ async fn run(config: Config, shared: SharedRef, mut cancel: watch::Receiver<bool
         let mut sampling = tokio::time::interval(Duration::from_secs_f64(1.0 / rate_hz as f64));
         sampling.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            let output_deadline = sender.as_ref().and_then(Sender::deadline);
+            let output_deadline = output_deadline(&shared, &sender);
             tokio::select! {
                 _ = cancel.changed() => return Err(Error::Cancelled),
                 _ = sampling.tick() => {
@@ -984,7 +1112,7 @@ async fn pump(
     let mut ticks = tokio::time::interval(Duration::from_millis(20));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        let output_deadline = sender.as_ref().and_then(Sender::deadline);
+        let output_deadline = output_deadline(shared, sender);
         let request_deadline = (config.pose_input == PoseInput::Quaternion && !writing)
             .then(|| outstanding.map_or(next_request, |sent| sent + Duration::from_millis(250)));
         let battery_deadline =
@@ -2296,5 +2424,249 @@ mod motion_tests {
             rate.observe(0xe4, Some(t)).unwrap();
         }
         assert!(rate.observe(0xe4, Some(20)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod dolby_tests {
+    use super::*;
+    use rosc::{OscPacket, OscType};
+    use std::{net::UdpSocket, thread};
+
+    fn socket() -> UdpSocket {
+        let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.set_nonblocking(true).unwrap();
+        s
+    }
+    fn drain(s: &UdpSocket) -> Vec<rosc::OscMessage> {
+        let mut result = Vec::new();
+        let mut data = [0; 8192];
+        while let Ok(n) = s.recv(&mut data) {
+            let (_, OscPacket::Message(message)) = rosc::decoder::decode_udp(&data[..n]).unwrap()
+            else {
+                panic!("bundle")
+            };
+            result.push(message);
+        }
+        result
+    }
+    fn until(mut condition: impl FnMut() -> bool) {
+        let end = Instant::now() + Duration::from_secs(3);
+        while !condition() {
+            assert!(Instant::now() < end, "timed out");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+    #[test]
+    fn dual_outputs_share_samples_and_recenter_does_not_change_posebridge() {
+        let pb = socket();
+        let dar = socket();
+        let mut c = Controller::new().unwrap();
+        let config = Config {
+            source: Source::Simulate {
+                pattern: Pattern::Fixed,
+                euler_deg: [35., 25., -10.],
+                rate_hz: 100,
+                sample_clock: false,
+            },
+            osc: Some(OscConfig {
+                target: pb.local_addr().unwrap(),
+                max_rate_hz: 100,
+                format: OscFormat::Quaternion,
+            }),
+            dolby_osc: Some(DolbyOscConfig {
+                target: dar.local_addr().unwrap(),
+                max_rate_hz: 25,
+            }),
+            ..Default::default()
+        };
+        c.set_config(config).unwrap();
+        assert!(c.recenter_dolby().is_err());
+        c.start().unwrap();
+        until(|| c.status().dolby_osc.is_some_and(|s| s.sent >= 2));
+        let before = c.latest_pose().unwrap();
+        drain(&dar);
+        c.recenter_dolby().unwrap();
+        let mut centered = false;
+        let mut primary = 0;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(350) || !centered {
+            for message in drain(&dar) {
+                assert_eq!(message.addr, "/ypr");
+                assert_eq!(message.args.len(), 3);
+                centered |= message
+                    .args
+                    .iter()
+                    .all(|v| matches!(v,OscType::Float(v) if v.abs()<0.001));
+            }
+            for message in drain(&pb) {
+                match message.addr.as_str() {
+                    crate::osc::QUATERNION_ADDRESS => {
+                        primary += 1;
+                        for (value, expected) in
+                            message.args[13..].iter().zip(before.quaternion_xyzw)
+                        {
+                            let OscType::Float(value) = value else {
+                                panic!()
+                            };
+                            assert!((f64::from(*value) - expected).abs() < 1e-6);
+                        }
+                    }
+                    crate::osc::INFO_ADDRESS | crate::osc::STATUS_ADDRESS => {
+                        let OscType::String(ref json) = message.args[0] else {
+                            panic!()
+                        };
+                        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+                        if let Some(d) = value.get("descriptor") {
+                            assert!(d["application_config"].get("dolby_osc").is_none());
+                        }
+                        if let Some(s) = value.get("status") {
+                            assert!(s.get("dolby_osc").is_none());
+                        }
+                    }
+                    _ => panic!("unexpected address"),
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(2));
+            thread::sleep(Duration::from_millis(2));
+        }
+        let after = c.latest_pose().unwrap();
+        assert_eq!(before.reference_epoch, after.reference_epoch);
+        assert_eq!(before.metadata_revision, after.metadata_revision);
+        assert_eq!(before.quaternion_xyzw, after.quaternion_xyzw);
+        assert!(primary > 15);
+        let status = c.status();
+        assert!(status.osc_sent > status.dolby_osc.as_ref().unwrap().sent * 2);
+        c.stop().unwrap();
+        assert!(!c.status().dolby_osc.unwrap().reference_set);
+        assert!(c.recenter_dolby().is_err());
+        drain(&pb);
+        drain(&dar);
+        thread::sleep(Duration::from_millis(70));
+        // The final stopped heartbeat can arrive after the first socket drain.
+        // Stop suppresses pose output while preserving PoseBridge's telemetry.
+        let stopped = drain(&pb);
+        assert!(
+            stopped.iter().all(|message| matches!(
+                message.addr.as_str(),
+                crate::osc::INFO_ADDRESS | crate::osc::STATUS_ADDRESS
+            )),
+            "pose received after stop: {stopped:?}"
+        );
+        assert!(drain(&dar).is_empty());
+        c.start().unwrap();
+        until(|| c.status().dolby_osc.is_some_and(|s| s.sent >= 1));
+        assert!(!c.status().dolby_osc.unwrap().reference_set);
+        c.stop().unwrap();
+    }
+    #[test]
+    fn one_output_failure_does_not_stop_the_other_or_acquisition() {
+        let pb = socket();
+        let dar = socket();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut sender = Some(
+            Sender::new(OscConfig {
+                target: pb.local_addr().unwrap(),
+                max_rate_hz: 100,
+                format: OscFormat::Quaternion,
+            })
+            .unwrap(),
+        );
+        {
+            let mut s = lock(&shared);
+            s.descriptor.instance_id = 1;
+            s.descriptor.session_id = 1;
+            s.status.session_id = 1;
+            s.dolby = Some(
+                crate::dolby::Sender::new(&DolbyOscConfig {
+                    target: dar.local_addr().unwrap(),
+                    max_rate_hz: 100,
+                })
+                .unwrap(),
+            );
+        }
+        let start = Instant::now();
+        publish(
+            &shared,
+            [0., 0., 0., 1.],
+            &RawData::default(),
+            start,
+            start,
+            None,
+        )
+        .unwrap();
+        lock(&shared).physical = Some([f64::NAN, 0., 0., 1.]);
+        emit(&shared, &mut sender).unwrap();
+        until(|| pb.peek(&mut [0; 8192]).is_ok());
+        assert_eq!(drain(&pb).len(), 1);
+        assert!(drain(&dar).is_empty());
+        assert_eq!(
+            lock(&shared).status.dolby_osc.as_ref().unwrap().send_errors,
+            1
+        );
+        thread::sleep(Duration::from_millis(15));
+        let now = Instant::now();
+        publish(
+            &shared,
+            [0., 0., 0., 1.],
+            &RawData::default(),
+            start,
+            now,
+            None,
+        )
+        .unwrap();
+        lock(&shared).pose.as_mut().unwrap().quaternion_xyzw = [f64::NAN, 0., 0., 1.];
+        emit(&shared, &mut sender).unwrap();
+        until(|| dar.peek(&mut [0; 8192]).is_ok());
+        assert_eq!(drain(&dar).len(), 1);
+        assert!(drain(&pb).is_empty());
+        let s = lock(&shared);
+        assert_eq!(s.status.state, ConnectionState::Active);
+        assert_eq!(s.status.osc_sent, 1);
+        assert_eq!(s.status.send_errors, 1);
+    }
+    #[test]
+    fn stale_recenter_preserves_the_existing_reference() {
+        let dar = socket();
+        let c = Controller::new().unwrap();
+        let now = Instant::now();
+        {
+            let mut s = lock(&c.shared);
+            s.descriptor.instance_id = 1;
+            s.status.session_id = 1;
+            s.dolby = Some(
+                crate::dolby::Sender::new(&DolbyOscConfig {
+                    target: dar.local_addr().unwrap(),
+                    max_rate_hz: 100,
+                })
+                .unwrap(),
+            );
+        }
+        publish(
+            &c.shared,
+            pose::from_euler([30., 20., 10.]).unwrap(),
+            &RawData::default(),
+            now,
+            now,
+            None,
+        )
+        .unwrap();
+        c.recenter_dolby().unwrap();
+        let descriptor = serde_json::to_value(&lock(&c.shared).descriptor).unwrap();
+        lock(&c.shared).last_pose = Some(now - Duration::from_millis(501));
+        assert!(c.recenter_dolby().is_err());
+        let s = lock(&c.shared);
+        assert!(s.dolby.as_ref().unwrap().status().reference_set);
+        assert_eq!(serde_json::to_value(&s.descriptor).unwrap(), descriptor);
+        drop(s);
+        begin_session(&c.shared);
+        assert!(
+            !lock(&c.shared)
+                .dolby
+                .as_ref()
+                .unwrap()
+                .status()
+                .reference_set
+        );
     }
 }

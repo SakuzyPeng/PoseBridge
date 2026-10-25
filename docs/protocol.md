@@ -1,6 +1,6 @@
 # PoseBridge 当前协议与坐标
 
-适用于 PoseBridge 0.6。**OSC 只支持一套协议，版本号为 3**。之前的 v1/v2 草案地址与选择开关已删除。
+适用于 PoseBridge 0.7。**OSC 只支持一套协议，版本号为 3**。之前的 v1/v2 草案地址与选择开关已删除。
 C ABI 400／CLI 的本地快照使用独立 schema=4，并提供查询年龄 age_ns；该字段不改变下面的 OSC 布局或心跳 schema。
 
 ## 设备输入
@@ -83,7 +83,7 @@ USB 默认 115200、8N1、无流控。连接后验证特征；普通采集保留
 **所有 64 位标识、时间和计数均为十进制字符串**；info/status 的消息序号分别递增。
 连接建立前 session_id 可为 `"0"`，此时不会发送姿态。
 
-info 的 `descriptor` 与 C ABI 完整快照一致：应用配置、平台身份、设备观察、软件能力与参考变化原因。
+info 的 `descriptor` 保留原有 PoseBridge 字段，与 C ABI 快照中的对应字段一致：应用配置、平台身份、设备观察、软件能力与参考变化原因。
 status 的 `status` 包含采集状态、分层计数、刷新率、交付直方图和错误信息。嵌套的会话／来源字段必须与共同字段一致。
 `status.battery` 附带电压、估算百分比、独立查询年龄与有效性，字段规则见[电量说明](usage.md#电压与估算电量)。
 电量错误仅记入 `status.battery.last_error`；它不使姿态保活，也不使姿态采集失败。
@@ -107,3 +107,8 @@ status 的 `status` 包含采集状态、分层计数、刷新率、交付直方
 - [BWT901BLECL5.0 协议与磁场校准流程](https://wit-motion.yuque.com/wumwnr/docs/gpare3)
 - [BLE SDK](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0)
 - [实测记录](validation.md)
+
+## 独立 Dolby 输出
+
+0.7 的可选 [Dolby 输出](dolby.md)与本页 OSC 3 并行，使用独立的 `/ypr` 三浮点报文。
+Dolby 配置和诊断仅在本地快照中扩展，不进入既有 PoseBridge 心跳；原有计数仅描述 PoseBridge 一路。

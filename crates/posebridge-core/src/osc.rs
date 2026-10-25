@@ -2,7 +2,7 @@
 use crate::{Error, OscConfig, OscFormat, PROTOCOL_VERSION, PoseSnapshot, Result, Snapshot};
 use rosc::{OscMessage, OscPacket, OscType};
 use serde_json::json;
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 pub const QUATERNION_ADDRESS: &str = "/posebridge/quaternion";
@@ -11,7 +11,7 @@ pub const INFO_ADDRESS: &str = "/posebridge/info";
 pub const STATUS_ADDRESS: &str = "/posebridge/status";
 pub const MAX_PACKET_BYTES: usize = 8192;
 
-fn message(address: &str, args: Vec<OscType>) -> Result<Vec<u8>> {
+pub(crate) fn message(address: &str, args: Vec<OscType>) -> Result<Vec<u8>> {
     let packet = rosc::encoder::encode(&OscPacket::Message(OscMessage {
         addr: address.into(),
         args,
@@ -81,22 +81,25 @@ pub fn encode(
 }
 
 fn socket(config: &OscConfig) -> Result<UdpSocket> {
-    crate::validate_rate(config.max_rate_hz)?;
-    if !config.target.ip().is_loopback() || config.target.port() == 0 {
+    socket_for(config.target, config.max_rate_hz)
+}
+pub(crate) fn socket_for(target: SocketAddr, max_rate_hz: u32) -> Result<UdpSocket> {
+    crate::validate_rate(max_rate_hz)?;
+    if !target.ip().is_loopback() || target.port() == 0 {
         return Err(Error::Invalid(
             "OSC target must be loopback with nonzero port".into(),
         ));
     }
-    let socket = UdpSocket::bind(if config.target.is_ipv4() {
+    let socket = UdpSocket::bind(if target.is_ipv4() {
         "127.0.0.1:0"
     } else {
         "[::1]:0"
     })?;
-    socket.connect(config.target)?;
+    socket.connect(target)?;
     socket.set_nonblocking(true)?;
     Ok(socket)
 }
-fn send(socket: &UdpSocket, packet: &[u8]) -> Result<bool> {
+pub(crate) fn send(socket: &UdpSocket, packet: &[u8]) -> Result<bool> {
     match socket.send(packet) {
         Ok(n) if n == packet.len() => Ok(true),
         Ok(_) => Err(Error::Io("partial UDP datagram send".into())),
@@ -245,12 +248,18 @@ impl Telemetry {
                 "source_id":d.source_id,"instance_id":d.instance_id.to_string(),"session_id":d.session_id.to_string(),
                 "metadata_revision":d.metadata_revision.to_string(),"reference_epoch":d.reference_epoch.to_string(),"message_seq":sequence.to_string()});
             if info {
+                // Dolby configuration and diagnostics are local extensions,
+                // not additions to the PoseBridge 3 wire contract.
+                let mut descriptor = d.clone();
+                descriptor.application_config.dolby_osc = None;
                 value["descriptor"] =
-                    serde_json::to_value(d).map_err(|e| Error::Internal(e.to_string()))?;
+                    serde_json::to_value(descriptor).map_err(|e| Error::Internal(e.to_string()))?;
                 self.next_info = Some(now + Duration::from_secs(5));
             } else {
-                value["status"] = serde_json::to_value(&snapshot.status)
-                    .map_err(|e| Error::Internal(e.to_string()))?;
+                let mut status = snapshot.status.clone();
+                status.dolby_osc = None;
+                value["status"] =
+                    serde_json::to_value(status).map_err(|e| Error::Internal(e.to_string()))?;
                 self.next_status = Some(now + Duration::from_secs(1));
             }
             let packet = message(

@@ -2833,7 +2833,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-capi"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "cbindgen",
  "posebridge-core",
@@ -2842,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "btleplug",
  "clap",
@@ -2856,7 +2856,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "eframe",
  "embed-resource",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "posebridge-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "btleplug",
  "futures-util",
